@@ -30,7 +30,6 @@ import type {
   Investment,
   InvestmentStatus,
   MockScenario,
-  Role,
   WalletStatus,
 } from "@/app/lib/types";
 
@@ -41,7 +40,6 @@ type WithdrawStep = "review" | "confirm" | "success";
 type FundingStep = "review" | "approve" | "confirm" | "success";
 
 export default function Home() {
-  const [role, setRole] = useState<Role>("user");
   const [walletStatus, setWalletStatus] = useState<WalletStatus>("disconnected");
   const [walletModalOpen, setWalletModalOpen] = useState(false);
 
@@ -61,6 +59,7 @@ export default function Home() {
 
   const [fundingModalOpen, setFundingModalOpen] = useState(false);
   const [fundingStep, setFundingStep] = useState<FundingStep>("review");
+  const showLegacyAdminPanel = false;
 
   const derivedInvestments = useMemo(
     () =>
@@ -329,51 +328,28 @@ export default function Home() {
             <h1 className="text-2xl font-bold tracking-tight">Your Vault Portfolio</h1>
           </div>
           <div className="flex items-center gap-2">
-            <button
-              className={`h-10 rounded-[var(--radius-md)] px-3 text-sm font-semibold ${
-                role === "user"
-                  ? "bg-[var(--color-primary-700)] text-white"
-                  : "bg-[var(--color-surface-alt)] text-[var(--color-text-secondary)]"
-              }`}
-              onClick={() => setRole("user")}
-              type="button"
-            >
-              User
-            </button>
-            <button
-              className={`h-10 rounded-[var(--radius-md)] px-3 text-sm font-semibold ${
-                role === "admin"
-                  ? "bg-[var(--color-primary-700)] text-white"
-                  : "bg-[var(--color-surface-alt)] text-[var(--color-text-secondary)]"
-              }`}
-              onClick={() => setRole("admin")}
-              type="button"
-            >
-              Admin
-            </button>
             <div className="hidden rounded-[var(--radius-md)] border border-[var(--color-border)] px-3 py-2 text-sm font-medium text-[var(--color-text-secondary)] sm:block">
               {shortAddress(data.profile.walletAddress)}
             </div>
           </div>
         </header>
 
-        {role === "user" ? (
-          <UserView
-            tab={userTab}
-            setTab={setUserTab}
-            data={data}
-            openInvest={openInvest}
-            openWithdraw={() => {
-              setWithdrawStep("review");
-              setWithdrawModalOpen(true);
-            }}
-            openDetails={setSelectedInvestmentId}
-            activeInvestments={activeInvestments}
-            readyInvestments={readyInvestments}
-            withdrawnInvestments={withdrawnInvestments}
-            statusBanner={statusBanner}
-          />
-        ) : (
+        <UserView
+          tab={userTab}
+          setTab={setUserTab}
+          data={data}
+          openInvest={openInvest}
+          openWithdraw={() => {
+            setWithdrawStep("review");
+            setWithdrawModalOpen(true);
+          }}
+          openDetails={setSelectedInvestmentId}
+          activeInvestments={activeInvestments}
+          readyInvestments={readyInvestments}
+          withdrawnInvestments={withdrawnInvestments}
+          statusBanner={statusBanner}
+        />
+        {showLegacyAdminPanel ? (
           <AdminView
             tab={adminTab}
             setTab={setAdminTab}
@@ -383,7 +359,7 @@ export default function Home() {
               setFundingModalOpen(true);
             }}
           />
-        )}
+        ) : null}
       </div>
 
       <Modal
