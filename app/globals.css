@@ -1,26 +1,191 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --color-bg: #f7f8fa;
+  --color-surface: #ffffff;
+  --color-surface-alt: #f1f4f8;
+  --color-border: #e6eaf0;
+  --color-text-primary: #0f1728;
+  --color-text-secondary: #5b6472;
+  --color-text-tertiary: #8a93a3;
+
+  --color-primary-900: #0e1a2b;
+  --color-primary-700: #18304d;
+  --color-primary-500: #245d8c;
+  --color-primary-400: #3d7db4;
+  --color-primary-100: #e8f1f8;
+
+  --color-success-700: #107a5d;
+  --color-success-500: #16a174;
+  --color-success-100: #e7f7f1;
+
+  --color-warning-700: #9a6500;
+  --color-warning-500: #d18b00;
+  --color-warning-100: #fff4d9;
+
+  --color-error-700: #b42318;
+  --color-error-500: #d92d20;
+  --color-error-100: #feecec;
+
+  --color-info-700: #155bba;
+  --color-info-100: #eaf2ff;
+
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 18px;
+  --radius-xl: 24px;
+
+  --shadow-sm: 0 8px 20px rgb(15 23 40 / 4%);
+  --shadow-md: 0 14px 28px rgb(15 23 40 / 8%);
+
+  --background: var(--color-bg);
+  --foreground: var(--color-text-primary);
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
+  --font-sans: var(--font-manrope);
   --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-manrope), "Segoe UI", sans-serif;
+  font-feature-settings: "tnum" 1;
+}
+
+* {
+  border-color: var(--color-border);
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--font-space-grotesk), "Segoe UI", sans-serif;
+  color: var(--color-text-primary);
+}
+
+.vault-shell {
+  background:
+    radial-gradient(circle at 10% 0%, rgb(36 93 140 / 13%), transparent 35%),
+    radial-gradient(circle at 90% 80%, rgb(22 161 116 / 10%), transparent 33%),
+    var(--color-bg);
+}
+
+.vault-card {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.vault-card-soft {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-alt);
+}
+
+.vault-btn-primary {
+  border-radius: var(--radius-md);
+  background: linear-gradient(135deg, var(--color-primary-700), var(--color-primary-500));
+  color: #fff;
+  font-weight: 600;
+  transition: transform 180ms ease, box-shadow 180ms ease, filter 180ms ease;
+}
+
+.vault-btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+  filter: saturate(1.1);
+}
+
+.vault-btn-secondary {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-primary-100);
+  color: var(--color-primary-700);
+  font-weight: 600;
+}
+
+.vault-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.vault-chip-success {
+  background: var(--color-success-100);
+  color: var(--color-success-700);
+}
+
+.vault-chip-warning {
+  background: var(--color-warning-100);
+  color: var(--color-warning-700);
+}
+
+.vault-chip-info {
+  background: var(--color-info-100);
+  color: var(--color-info-700);
+}
+
+.vault-chip-neutral {
+  background: var(--color-surface-alt);
+  color: var(--color-text-secondary);
+}
+
+.vault-skeleton {
+  background: linear-gradient(
+    90deg,
+    rgb(230 234 240 / 30%) 0%,
+    rgb(230 234 240 / 80%) 40%,
+    rgb(230 234 240 / 30%) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.2s linear infinite;
+}
+
+@keyframes shimmer {
+  from {
+    background-position: 0 0;
+  }
+
+  to {
+    background-position: -200% 0;
+  }
+}
+
+@keyframes riseIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.vault-rise {
+  animation: riseIn 240ms ease both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
 }
