@@ -2,6 +2,8 @@
 
 import {
   Activity,
+  Check,
+  Copy,
   Coins,
   HandCoins,
   Landmark,
@@ -21,6 +23,7 @@ import {
 } from "@/app/lib/constants";
 import { formatDate, shortAddress } from "@/app/lib/format";
 import {
+  getToronetUsernameByAddress,
   loginWithToronet,
   queryToronetContractApi,
   signupWithToronet,
@@ -28,6 +31,7 @@ import {
 } from "@/app/lib/toronet-client";
 import {
   extractBigIntValue,
+  isHexAddress,
   extractResultValue,
   extractTxHash,
 } from "@/app/lib/toronet-common";
@@ -158,6 +162,8 @@ export default function Home() {
 
   const [hydrated, setHydrated] = useState(false);
   const [session, setSession] = useState<ToronetSession | null>(null);
+  const [displayUsername, setDisplayUsername] = useState<string>("");
+  const [copiedAddress, setCopiedAddress] = useState(false);
 
   const [authMode, setAuthMode] = useState<AuthMode>("login");
   const [identifier, setIdentifier] = useState("");
@@ -320,6 +326,46 @@ export default function Home() {
     void refreshPortfolio(session);
   }, [session, refreshPortfolio]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    async function resolveUsername() {
+      if (!session) {
+        setDisplayUsername("");
+        return;
+      }
+
+      const fromSession = session.username?.trim();
+      if (fromSession) {
+        setDisplayUsername(fromSession);
+        return;
+      }
+
+      const identifier = session.identifier.trim();
+      if (identifier && !isHexAddress(identifier)) {
+        setDisplayUsername(identifier);
+        return;
+      }
+
+      try {
+        const found = await getToronetUsernameByAddress(session.address);
+        if (!cancelled) {
+          setDisplayUsername(found ?? "");
+        }
+      } catch {
+        if (!cancelled) {
+          setDisplayUsername("");
+        }
+      }
+    }
+
+    void resolveUsername();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [session]);
+
   async function handleLogin() {
     setAuthError("");
     setAuthLoading(true);
@@ -392,9 +438,25 @@ export default function Home() {
   function logout() {
     clearStoredSession();
     setSession(null);
+    setDisplayUsername("");
+    setCopiedAddress(false);
     setPortfolio(INITIAL_PORTFOLIO);
     setActivity([]);
     setTab("home");
+  }
+
+  async function copyAddressToClipboard() {
+    if (!session || typeof navigator === "undefined" || !navigator.clipboard) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(session.address);
+      setCopiedAddress(true);
+      window.setTimeout(() => setCopiedAddress(false), 1800);
+    } catch {
+      setCopiedAddress(false);
+    }
   }
 
   async function approveAmount() {
@@ -578,9 +640,19 @@ export default function Home() {
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Badge tone="info">{network}</Badge>
-            <span className="hidden rounded-[var(--radius-md)] border border-[var(--color-border)] px-3 py-2 text-sm font-medium text-[var(--color-text-secondary)] sm:block">
-              {shortAddress(session.address)}
-            </span>
+            {displayUsername ? <Badge tone="neutral">@{displayUsername}</Badge> : null}
+            <button
+              type="button"
+              onClick={() => {
+                void copyAddressToClipboard();
+              }}
+              className="inline-flex h-12 items-center rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-4 text-sm font-semibold text-[var(--color-text-primary)]"
+              title={session.address}
+              aria-label={copiedAddress ? "Address copied" : "Copy wallet address"}
+            >
+              {copiedAddress ? <Check size={16} /> : <Copy size={16} />}
+              <span className="ml-2">{shortAddress(session.address)}</span>
+            </button>
             <Button
               variant="secondary"
               onClick={() => {
@@ -590,18 +662,6 @@ export default function Home() {
             >
               <RefreshCcw size={16} />
             </Button>
-            <Link
-              href="/admin"
-              className="inline-flex h-12 items-center rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-4 text-sm font-semibold text-[var(--color-text-primary)]"
-            >
-              Admin
-            </Link>
-            <Link
-              href="/mint"
-              className="inline-flex h-12 items-center rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-4 text-sm font-semibold text-[var(--color-text-primary)]"
-            >
-              Mint
-            </Link>
             <Button variant="ghost" onClick={logout}>
               <LogOut size={16} />
             </Button>

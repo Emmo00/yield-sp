@@ -1,12 +1,22 @@
-import { createWallet, getAddr, verifyWalletPassword } from "torosdk";
+import { createWallet, getAddr, getName, verifyWalletPassword } from "torosdk";
 
-import { getConfiguredNetwork, type ContractKey } from "@/app/lib/constants";
 import {
-  queryToronetContract,
+  getConfiguredNetwork,
+  type ContractKey,
+  type NetworkEnv,
+} from "@/app/lib/constants";
+import {
   writeToronetContract,
 } from "@/app/lib/toronet-contract";
 import { extractAddress, isHexAddress } from "@/app/lib/toronet-common";
 import { ensureToronetSDK } from "@/app/lib/toronet-sdk";
+
+interface QueryApiResponse {
+  ok?: boolean;
+  error?: string;
+  details?: string;
+  response?: unknown;
+}
 
 interface ContractApiParams {
   address?: string;
@@ -14,6 +24,7 @@ interface ContractApiParams {
   contract: ContractKey;
   functionName: string;
   args?: Array<string | number | boolean | bigint>;
+  network?: NetworkEnv;
   mode?: "query" | "transaction";
 }
 
@@ -29,11 +40,32 @@ interface SignupResult {
   network?: string;
 }
 
+function toErrorMessage(payload: QueryApiResponse | null, fallback: string): string {
+  if (!payload) {
+    return fallback;
+  }
+
+  if (payload.error && payload.details) {
+    return `${payload.error} ${payload.details}`;
+  }
+
+  return payload.error ?? payload.details ?? fallback;
+}
+
+async function parseJsonResponse(response: Response): Promise<QueryApiResponse | null> {
+  try {
+    return (await response.json()) as QueryApiResponse;
+  } catch {
+    return null;
+  }
+}
+
 export async function loginWithToronet(
   identifier: string,
   password: string,
 ): Promise<LoginResult> {
   const normalizedIdentifier = identifier.trim();
+
   if (!normalizedIdentifier || !password) {
     throw new Error("Identifier and password are required.");
   }
@@ -94,6 +126,34 @@ export async function signupWithToronet(
   };
 }
 
+export async function getToronetUsernameByAddress(
+  address: string,
+): Promise<string | null> {
+  const normalizedAddress = address.trim();
+  if (!isHexAddress(normalizedAddress)) {
+    return null;
+  }
+
+  ensureToronetSDK(getConfiguredNetwork());
+  const result = await getName({ address: normalizedAddress });
+
+  if (typeof result === "string" && result.trim().length > 0) {
+    return result.trim();
+  }
+
+  if (result && typeof result === "object") {
+    const record = result as Record<string, unknown>;
+    for (const key of ["name", "username", "result", "value"]) {
+      const value = record[key];
+      if (typeof value === "string" && value.trim().length > 0) {
+        return value.trim();
+      }
+    }
+  }
+
+  return null;
+}
+
 export async function callToronetContractApi(params: ContractApiParams): Promise<unknown> {
   const args = params.args?.map((arg) => (typeof arg === "bigint" ? arg.toString() : arg)) ?? [];
 
@@ -109,13 +169,25 @@ export async function callToronetContractApi(params: ContractApiParams): Promise
     return result.raw;
   }
 
-  const result = await queryToronetContract({
-    contract: params.contract,
-    functionName: params.functionName,
-    args,
+  const response = await fetch("/api/toronet/query", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      contract: params.contract,
+      functionName: params.functionName,
+      args,
+      network: params.network ?? getConfiguredNetwork(),
+    }),
   });
 
-  return result.raw;
+  const payload = await parseJsonResponse(response);
+  if (!response.ok || !payload?.ok) {
+    throw new Error(toErrorMessage(payload, "Contract query failed."));
+  }
+
+  return payload.response;
 }
 
 export async function queryToronetContractApi(

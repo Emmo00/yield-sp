@@ -27,7 +27,7 @@ export default function MintPage() {
   const [loadingSession, setLoadingSession] = useState(true);
 
   const [decimals, setDecimals] = useState(18);
-  const [symbol, setSymbol] = useState("ESPEES");
+  const [symbol, setSymbol] = useState("xESPEES");
   const [balance, setBalance] = useState<bigint>(BigInt(0));
 
   const [recipient, setRecipient] = useState("");
@@ -125,6 +125,14 @@ export default function MintPage() {
       setSuccessMessage(`Minted ${amount} ${symbol} to ${shortAddress(recipient)}.`);
       setLastTxHash(extractTxHash(response) ?? "");
       await refreshBalances(session);
+
+      // Chain state can lag for a short period after submission, so re-check shortly after.
+      window.setTimeout(() => {
+        void refreshBalances(session);
+      }, 1500);
+      window.setTimeout(() => {
+        void refreshBalances(session);
+      }, 3500);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Mint failed.");
     } finally {
