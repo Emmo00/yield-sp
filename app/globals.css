@@ -1,6 +1,10 @@
 @import "tailwindcss";
 
 :root {
+  --font-manrope: "Segoe UI", "Inter", "Helvetica Neue", Arial, sans-serif;
+  --font-space-grotesk: "Aptos", "Segoe UI", "Inter", "Helvetica Neue", Arial, sans-serif;
+  --font-geist-mono: "Cascadia Mono", "Consolas", "SFMono-Regular", Menlo, Monaco, monospace;
+
   --color-bg: #f7f8fa;
   --color-surface: #ffffff;
   --color-surface-alt: #f1f4f8;
