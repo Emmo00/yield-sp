@@ -23,8 +23,8 @@ interface AbiFunction {
 type ContractAbi = readonly AbiFunction[];
 
 export interface ToronetContractCallInput {
-  address: string;
-  password: string;
+  address?: string;
+  password?: string;
   contract: ContractKey;
   functionName: string;
   args?: ContractCallArg[];
@@ -130,7 +130,10 @@ function extractToronetError(payload: unknown): string | null {
   return null;
 }
 
-function buildKeystorePayload(input: ToronetContractCallInput, contractAddress: string) {
+function buildKeystorePayload(
+  input: ToronetContractCallInput & { address: string; password: string },
+  contractAddress: string,
+) {
   return {
     op: "callContractFunction",
     params: [
@@ -155,9 +158,21 @@ function buildKeystorePayload(input: ToronetContractCallInput, contractAddress: 
 async function callToronetWrite(
   input: ToronetContractCallInput,
 ): Promise<{ raw: unknown; network: NetworkEnv; contractAddress: string }> {
+  const address = input.address?.trim() ?? "";
+  const password = input.password ?? "";
+  if (!address || !password) {
+    throw new Error("address and password are required for transaction calls.");
+  }
+
   const network = input.network ?? getConfiguredNetwork();
   const contractAddress = getContractAddress(input.contract, network);
   const baseUrl = normalizeBaseUrl(getToronetBaseUrl(network));
+
+  const writeInput: ToronetContractCallInput & { address: string; password: string } = {
+    ...input,
+    address,
+    password,
+  };
 
   const response = await fetch(`${baseUrl}/api/keystore/`, {
     method: "POST",
@@ -165,7 +180,7 @@ async function callToronetWrite(
       "Content-Type": "application/json",
     },
     cache: "no-store",
-    body: JSON.stringify(buildKeystorePayload(input, contractAddress)),
+    body: JSON.stringify(buildKeystorePayload(writeInput, contractAddress)),
   });
 
   const responseJson = await response.json().catch(() => null);

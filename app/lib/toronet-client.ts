@@ -1,24 +1,16 @@
 import { createWallet, getAddr, verifyWalletPassword } from "torosdk";
 
 import { getConfiguredNetwork, type ContractKey } from "@/app/lib/constants";
+import {
+  queryToronetContract,
+  writeToronetContract,
+} from "@/app/lib/toronet-contract";
 import { extractAddress, isHexAddress } from "@/app/lib/toronet-common";
 import { ensureToronetSDK } from "@/app/lib/toronet-sdk";
 
-interface ApiResponseShape {
-  ok?: boolean;
-  error?: string;
-  details?: string;
-  response?: unknown;
-  address?: string;
-  identifier?: string;
-  username?: string;
-  network?: string;
-  contractAddress?: string;
-}
-
 interface ContractApiParams {
-  address: string;
-  password: string;
+  address?: string;
+  password?: string;
   contract: ContractKey;
   functionName: string;
   args?: Array<string | number | boolean | bigint>;
@@ -35,26 +27,6 @@ interface SignupResult {
   address: string;
   username: string;
   network?: string;
-}
-
-function toErrorMessage(payload: ApiResponseShape | null, fallback: string): string {
-  if (!payload) {
-    return fallback;
-  }
-
-  if (payload.error && payload.details) {
-    return `${payload.error} ${payload.details}`;
-  }
-
-  return payload.error ?? payload.details ?? fallback;
-}
-
-async function parseJsonResponse(response: Response): Promise<ApiResponseShape | null> {
-  try {
-    return (await response.json()) as ApiResponseShape;
-  } catch {
-    return null;
-  }
 }
 
 export async function loginWithToronet(
@@ -123,27 +95,27 @@ export async function signupWithToronet(
 }
 
 export async function callToronetContractApi(params: ContractApiParams): Promise<unknown> {
-  const response = await fetch("/api/toronet/contract", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
+  const args = params.args?.map((arg) => (typeof arg === "bigint" ? arg.toString() : arg)) ?? [];
+
+  if ((params.mode ?? "query") === "transaction") {
+    const result = await writeToronetContract({
       address: params.address,
       password: params.password,
       contract: params.contract,
       functionName: params.functionName,
-      args: params.args?.map((arg) => (typeof arg === "bigint" ? arg.toString() : arg)) ?? [],
-      mode: params.mode ?? "query",
-    }),
-  });
+      args,
+    });
 
-  const payload = await parseJsonResponse(response);
-  if (!response.ok || !payload?.ok) {
-    throw new Error(toErrorMessage(payload, "Contract call failed."));
+    return result.raw;
   }
 
-  return payload.response;
+  const result = await queryToronetContract({
+    contract: params.contract,
+    functionName: params.functionName,
+    args,
+  });
+
+  return result.raw;
 }
 
 export async function queryToronetContractApi(
@@ -170,18 +142,19 @@ export async function mintOnToronetTestnet(params: {
   to: string;
   amount: string;
 }): Promise<unknown> {
-  const response = await fetch("/api/toronet/mint", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(params),
-  });
-
-  const payload = await parseJsonResponse(response);
-  if (!response.ok || !payload?.ok) {
-    throw new Error(toErrorMessage(payload, "Mint request failed."));
+  const network = getConfiguredNetwork();
+  if (network !== "testnet") {
+    throw new Error("Minting is only enabled on testnet.");
   }
 
-  return payload.response;
+  const result = await writeToronetContract({
+    address: params.address,
+    password: params.password,
+    contract: "stablecoin",
+    functionName: "mint",
+    args: [params.to, params.amount],
+    network,
+  });
+
+  return result.raw;
 }
