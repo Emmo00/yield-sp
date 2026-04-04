@@ -18,6 +18,7 @@ interface ContractApiParams {
   contract: ContractKey;
   functionName: string;
   args?: Array<string | number | boolean | bigint>;
+  mode?: "query" | "transaction";
 }
 
 interface LoginResult {
@@ -112,6 +113,7 @@ export async function callToronetContractApi(params: ContractApiParams): Promise
       contract: params.contract,
       functionName: params.functionName,
       args: params.args?.map((arg) => (typeof arg === "bigint" ? arg.toString() : arg)) ?? [],
+      mode: params.mode ?? "query",
     }),
   });
 
@@ -121,6 +123,24 @@ export async function callToronetContractApi(params: ContractApiParams): Promise
   }
 
   return payload.response;
+}
+
+export async function queryToronetContractApi(
+  params: Omit<ContractApiParams, "mode">,
+): Promise<unknown> {
+  return callToronetContractApi({
+    ...params,
+    mode: "query",
+  });
+}
+
+export async function writeToronetContractApi(
+  params: Omit<ContractApiParams, "mode">,
+): Promise<unknown> {
+  return callToronetContractApi({
+    ...params,
+    mode: "transaction",
+  });
 }
 
 export async function mintOnToronetTestnet(params: {

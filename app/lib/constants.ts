@@ -14,7 +14,12 @@ export const CONTRACT_ADDRESSES = {
 
 const TORONET_BASE_URLS: Record<NetworkEnv, string> = {
     mainnet: "https://www.toronet.org",
-    testnet: "http://testnet.toronet.org",
+    testnet: "https://testnet.toronet.org",
+};
+
+const TORONET_RPC_URLS: Record<NetworkEnv, string> = {
+    mainnet: "https://www.toronet.org",
+    testnet: "https://testnet.toronet.org",
 };
 
 export function getConfiguredNetwork(): NetworkEnv {
@@ -46,5 +51,22 @@ export function getToronetBaseUrl(
     }
 
     return envMainnet || TORONET_BASE_URLS.mainnet;
+}
+
+export function getToronetRpcUrl(
+    network: NetworkEnv = getConfiguredNetwork(),
+): string {
+    const envMainnet =
+        process.env.NEXT_PUBLIC_TORONET_MAINNET_RPC_URL ??
+        process.env.TORONET_MAINNET_RPC_URL;
+    const envTestnet =
+        process.env.NEXT_PUBLIC_TORONET_TESTNET_RPC_URL ??
+        process.env.TORONET_TESTNET_RPC_URL;
+
+    if (network === "testnet") {
+        return envTestnet || TORONET_RPC_URLS.testnet;
+    }
+
+    return envMainnet || TORONET_RPC_URLS.mainnet;
 }
 

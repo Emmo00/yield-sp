@@ -10,7 +10,7 @@ import {
   getContractAddress,
   type NetworkEnv,
 } from "@/app/lib/constants";
-import { callToronetContractApi, mintOnToronetTestnet } from "@/app/lib/toronet-client";
+import { mintOnToronetTestnet, queryToronetContractApi } from "@/app/lib/toronet-client";
 import { extractBigIntValue, extractTxHash } from "@/app/lib/toronet-common";
 import { formatDate, shortAddress } from "@/app/lib/format";
 import { getStoredSession, type ToronetSession } from "@/app/lib/session";
@@ -44,19 +44,19 @@ export default function MintPage() {
 
     try {
       const [decimalsRaw, symbolRaw, balanceRaw] = await Promise.all([
-        callToronetContractApi({
+        queryToronetContractApi({
           address: activeSession.address,
           password: activeSession.password,
           contract: "stablecoin",
           functionName: "decimals",
         }),
-        callToronetContractApi({
+        queryToronetContractApi({
           address: activeSession.address,
           password: activeSession.password,
           contract: "stablecoin",
           functionName: "symbol",
         }),
-        callToronetContractApi({
+        queryToronetContractApi({
           address: activeSession.address,
           password: activeSession.password,
           contract: "stablecoin",

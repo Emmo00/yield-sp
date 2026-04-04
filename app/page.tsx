@@ -21,9 +21,10 @@ import {
 } from "@/app/lib/constants";
 import { formatDate, shortAddress } from "@/app/lib/format";
 import {
-  callToronetContractApi,
   loginWithToronet,
+  queryToronetContractApi,
   signupWithToronet,
+  writeToronetContractApi,
 } from "@/app/lib/toronet-client";
 import {
   extractBigIntValue,
@@ -213,53 +214,53 @@ export default function Home() {
           lockPeriodRaw,
           positionsRaw,
         ] = await Promise.all([
-          callToronetContractApi({
+          queryToronetContractApi({
             address: activeSession.address,
             password: activeSession.password,
             contract: "stablecoin",
             functionName: "decimals",
           }),
-          callToronetContractApi({
+          queryToronetContractApi({
             address: activeSession.address,
             password: activeSession.password,
             contract: "stablecoin",
             functionName: "symbol",
           }),
-          callToronetContractApi({
+          queryToronetContractApi({
             address: activeSession.address,
             password: activeSession.password,
             contract: "stablecoin",
             functionName: "balanceOf",
             args: [activeSession.address],
           }),
-          callToronetContractApi({
+          queryToronetContractApi({
             address: activeSession.address,
             password: activeSession.password,
             contract: "loan-vault",
             functionName: "availablePayout",
             args: [activeSession.address],
           }),
-          callToronetContractApi({
+          queryToronetContractApi({
             address: activeSession.address,
             password: activeSession.password,
             contract: "loan-vault",
             functionName: "totalInvested",
             args: [activeSession.address],
           }),
-          callToronetContractApi({
+          queryToronetContractApi({
             address: activeSession.address,
             password: activeSession.password,
             contract: "loan-vault",
             functionName: "projectedPayout",
             args: [activeSession.address],
           }),
-          callToronetContractApi({
+          queryToronetContractApi({
             address: activeSession.address,
             password: activeSession.password,
             contract: "loan-vault",
             functionName: "LOCK_PERIOD",
           }),
-          callToronetContractApi({
+          queryToronetContractApi({
             address: activeSession.address,
             password: activeSession.password,
             contract: "loan-vault",
@@ -402,7 +403,7 @@ export default function Home() {
 
     const amountInUnits = toUnits(investAmount, portfolio.decimals);
 
-    const response = await callToronetContractApi({
+    const response = await writeToronetContractApi({
       address: session.address,
       password: session.password,
       contract: "stablecoin",
@@ -425,7 +426,7 @@ export default function Home() {
 
     const amountInUnits = toUnits(investAmount, portfolio.decimals);
 
-    const response = await callToronetContractApi({
+    const response = await writeToronetContractApi({
       address: session.address,
       password: session.password,
       contract: "loan-vault",
@@ -446,7 +447,7 @@ export default function Home() {
       return;
     }
 
-    const response = await callToronetContractApi({
+    const response = await writeToronetContractApi({
       address: session.address,
       password: session.password,
       contract: "loan-vault",

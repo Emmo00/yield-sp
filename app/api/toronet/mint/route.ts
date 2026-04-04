@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { callToronetContract } from "@/app/lib/toronet-contract";
+import { writeToronetContract } from "@/app/lib/toronet-contract";
 import { getConfiguredNetwork } from "@/app/lib/constants";
 import { isHexAddress } from "@/app/lib/toronet-common";
 
@@ -70,7 +70,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const result = await callToronetContract({
+    const result = await writeToronetContract({
       address,
       password,
       contract: "stablecoin",
