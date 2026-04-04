@@ -1,6 +1,26 @@
 export type NetworkEnv = "mainnet" | "testnet";
 export type ContractKey = "loan-vault" | "stablecoin";
 
+export const toronetTestnet = {
+    id: 54321,
+    name: "Toronet Testnet",
+    network: "Toronet testnet",
+    iconUrl: "/toronet.svg",
+    iconBackground: "#fff",
+    nativeCurrency: {
+        decimals: 18,
+        name: "Toronet",
+        symbol: "TORO",
+    },
+    rpcUrls: {
+        public: { http: ["https://testnet.toronet.org/rpc/"] },
+        default: { http: ["https://testnet.toronet.org/rpc/"] },
+    },
+    blockExplorers: {
+        default: { name: "ToronetScan", url: "https://testnet.toronet.org/" },
+    },
+} as const;
+
 export const CONTRACT_ADDRESSES = {
     mainnet: {
         "loan-vault": "0x1234567890abcdef1234567890abcdef12345678",
@@ -18,8 +38,8 @@ const TORONET_BASE_URLS: Record<NetworkEnv, string> = {
 };
 
 const TORONET_RPC_URLS: Record<NetworkEnv, string> = {
-    mainnet: "https://www.toronet.org",
-    testnet: "https://testnet.toronet.org",
+    mainnet: "https://www.toronet.org/rpc/",
+    testnet: toronetTestnet.rpcUrls.default.http[0],
 };
 
 export function getConfiguredNetwork(): NetworkEnv {

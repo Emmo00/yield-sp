@@ -6,17 +6,11 @@ import {
   type NetworkEnv,
 } from "@/app/lib/constants";
 import {
+  queryToronetContract,
   writeToronetContract,
 } from "@/app/lib/toronet-contract";
 import { extractAddress, isHexAddress } from "@/app/lib/toronet-common";
 import { ensureToronetSDK } from "@/app/lib/toronet-sdk";
-
-interface QueryApiResponse {
-  ok?: boolean;
-  error?: string;
-  details?: string;
-  response?: unknown;
-}
 
 interface ContractApiParams {
   address?: string;
@@ -38,26 +32,6 @@ interface SignupResult {
   address: string;
   username: string;
   network?: string;
-}
-
-function toErrorMessage(payload: QueryApiResponse | null, fallback: string): string {
-  if (!payload) {
-    return fallback;
-  }
-
-  if (payload.error && payload.details) {
-    return `${payload.error} ${payload.details}`;
-  }
-
-  return payload.error ?? payload.details ?? fallback;
-}
-
-async function parseJsonResponse(response: Response): Promise<QueryApiResponse | null> {
-  try {
-    return (await response.json()) as QueryApiResponse;
-  } catch {
-    return null;
-  }
 }
 
 export async function loginWithToronet(
@@ -169,25 +143,14 @@ export async function callToronetContractApi(params: ContractApiParams): Promise
     return result.raw;
   }
 
-  const response = await fetch("/api/toronet/query", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      contract: params.contract,
-      functionName: params.functionName,
-      args,
-      network: params.network ?? getConfiguredNetwork(),
-    }),
+  const result = await queryToronetContract({
+    contract: params.contract,
+    functionName: params.functionName,
+    args,
+    network: params.network ?? getConfiguredNetwork(),
   });
 
-  const payload = await parseJsonResponse(response);
-  if (!response.ok || !payload?.ok) {
-    throw new Error(toErrorMessage(payload, "Contract query failed."));
-  }
-
-  return payload.response;
+  return result.raw;
 }
 
 export async function queryToronetContractApi(
