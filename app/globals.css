@@ -1,23 +1,23 @@
 @import "tailwindcss";
 
 :root {
-  --font-manrope: "Segoe UI", "Inter", "Helvetica Neue", Arial, sans-serif;
-  --font-space-grotesk: "Aptos", "Segoe UI", "Inter", "Helvetica Neue", Arial, sans-serif;
+  --font-manrope: "Aptos", "Segoe UI", "Trebuchet MS", sans-serif;
+  --font-space-grotesk: "Bahnschrift", "Aptos Display", "Segoe UI", sans-serif;
   --font-geist-mono: "Cascadia Mono", "Consolas", "SFMono-Regular", Menlo, Monaco, monospace;
 
-  --color-bg: #f7f8fa;
+  --color-bg: #f3f8fb;
   --color-surface: #ffffff;
-  --color-surface-alt: #f1f4f8;
-  --color-border: #e6eaf0;
-  --color-text-primary: #0f1728;
-  --color-text-secondary: #5b6472;
-  --color-text-tertiary: #8a93a3;
+  --color-surface-alt: #ebf4fb;
+  --color-border: #d8e7f2;
+  --color-text-primary: #10243a;
+  --color-text-secondary: #49637a;
+  --color-text-tertiary: #7b93a8;
 
-  --color-primary-900: #0e1a2b;
-  --color-primary-700: #18304d;
-  --color-primary-500: #245d8c;
-  --color-primary-400: #3d7db4;
-  --color-primary-100: #e8f1f8;
+  --color-primary-900: #0f2438;
+  --color-primary-700: #1a4f78;
+  --color-primary-500: #2770a5;
+  --color-primary-400: #3e8ec6;
+  --color-primary-100: #dfedf8;
 
   --color-success-700: #107a5d;
   --color-success-500: #16a174;
@@ -36,11 +36,11 @@
 
   --radius-sm: 10px;
   --radius-md: 14px;
-  --radius-lg: 18px;
-  --radius-xl: 24px;
+  --radius-lg: 20px;
+  --radius-xl: 28px;
 
-  --shadow-sm: 0 8px 20px rgb(15 23 40 / 4%);
-  --shadow-md: 0 14px 28px rgb(15 23 40 / 8%);
+  --shadow-sm: 0 8px 18px rgb(16 36 58 / 7%);
+  --shadow-md: 0 14px 34px rgb(16 36 58 / 13%);
 
   --background: var(--color-bg);
   --foreground: var(--color-text-primary);
@@ -76,15 +76,16 @@ h6 {
 
 .vault-shell {
   background:
-    radial-gradient(circle at 10% 0%, rgb(36 93 140 / 13%), transparent 35%),
-    radial-gradient(circle at 90% 80%, rgb(22 161 116 / 10%), transparent 33%),
+    radial-gradient(circle at 2% 0%, rgb(61 139 200 / 28%), transparent 34%),
+    radial-gradient(circle at 95% 82%, rgb(39 112 165 / 20%), transparent 30%),
+    linear-gradient(135deg, rgb(240 248 255 / 92%) 0%, rgb(233 245 255 / 78%) 44%, rgb(244 250 255 / 96%) 100%),
     var(--color-bg);
 }
 
 .vault-card {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  background: var(--color-surface);
+  background: linear-gradient(165deg, rgb(255 255 255 / 96%), rgb(248 253 255 / 92%));
   box-shadow: var(--shadow-sm);
 }
 
@@ -111,7 +112,7 @@ h6 {
 .vault-btn-secondary {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  background: var(--color-primary-100);
+  background: linear-gradient(155deg, rgb(241 249 255), rgb(223 237 248));
   color: var(--color-primary-700);
   font-weight: 600;
 }

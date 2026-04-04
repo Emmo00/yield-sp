@@ -1,6 +1,7 @@
 "use client";
 
 import { clsx } from "clsx";
+import { X } from "lucide-react";
 import type { ReactNode } from "react";
 
 type ButtonVariant = "primary" | "secondary" | "ghost";
@@ -19,11 +20,11 @@ export function Button({
   return (
     <button
       className={clsx(
-        "h-12 px-4 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary-500)] disabled:cursor-not-allowed disabled:opacity-50",
+        "inline-flex h-11 items-center justify-center gap-2 px-4 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary-500)] disabled:cursor-not-allowed disabled:opacity-50",
         variant === "primary" && "vault-btn-primary",
         variant === "secondary" && "vault-btn-secondary",
         variant === "ghost" &&
-          "rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white font-semibold text-[var(--color-text-secondary)]",
+          "rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white/90 font-semibold text-[var(--color-text-secondary)] backdrop-blur",
         fullWidth && "w-full",
         className,
       )}
@@ -43,7 +44,7 @@ interface CardProps {
 export function Card({ title, subtitle, children, className, soft = false }: CardProps) {
   return (
     <section
-      className={clsx(soft ? "vault-card-soft" : "vault-card", "p-5", className)}
+      className={clsx(soft ? "vault-card-soft" : "vault-card", "p-5 md:p-6", className)}
       aria-label={title}
     >
       {title ? (
@@ -156,13 +157,13 @@ export function Modal({
 
   return (
     <div
-      className="fixed inset-0 z-40 flex items-end justify-center bg-[rgb(14_26_43_/_52%)] px-4 pb-4 pt-16 md:items-center"
+      className="fixed inset-0 z-40 flex items-end justify-center bg-[rgb(12_23_40_/_58%)] px-4 pb-4 pt-16 backdrop-blur-[2px] md:items-center"
       role="dialog"
       aria-modal="true"
       aria-label={title}
     >
-      <div className="w-full max-w-lg overflow-hidden rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-white shadow-[0_20px_50px_rgb(15_23_40_/_18%)]">
-        <header className="flex items-start justify-between border-b border-[var(--color-border)] p-5">
+      <div className="w-full max-w-xl overflow-hidden rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface)] shadow-[0_26px_70px_rgb(15_23_40_/_22%)]">
+        <header className="flex items-start justify-between border-b border-[var(--color-border)] bg-[linear-gradient(135deg,rgb(251_254_255),rgb(240_247_255))] p-5">
           <div>
             <h2 className="text-xl font-semibold">{title}</h2>
             {subtitle ? (
@@ -170,17 +171,19 @@ export function Modal({
             ) : null}
           </div>
           <button
-            className="h-9 w-9 rounded-full border border-[var(--color-border)] text-[var(--color-text-secondary)]"
+            className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-[var(--color-border)] bg-white/90 text-[var(--color-text-secondary)]"
             onClick={onClose}
             type="button"
             aria-label="Close dialog"
           >
-            x
+            <X size={16} />
           </button>
         </header>
-        <div className="max-h-[68vh] overflow-auto p-5">{children}</div>
+        <div className="max-h-[68vh] overflow-auto p-5 md:p-6">{children}</div>
         {footer ? (
-          <footer className="flex gap-3 border-t border-[var(--color-border)] p-5">{footer}</footer>
+          <footer className="flex flex-wrap gap-3 border-t border-[var(--color-border)] bg-[var(--color-surface-alt)] p-5">
+            {footer}
+          </footer>
         ) : null}
       </div>
     </div>

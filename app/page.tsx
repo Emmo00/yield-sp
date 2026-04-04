@@ -2,20 +2,22 @@
 
 import {
   Activity,
+  ArrowRight,
   Check,
+  CircleCheckBig,
   Copy,
   Coins,
   HandCoins,
   Landmark,
+  LoaderCircle,
   LogOut,
   RefreshCcw,
-  ShieldCheck,
   UserCircle2,
 } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { Badge, Button, Card, Field, MetricCard, Segmented } from "@/app/components/vault-ui";
+import { Badge, Button, Card, Field, MetricCard, Modal, Segmented } from "@/app/components/vault-ui";
 import {
   getConfiguredNetwork,
   getContractAddress,
@@ -46,6 +48,8 @@ import { formatUnits, toUnits } from "@/app/lib/units";
 type AuthMode = "login" | "signup";
 type UserTab = "home" | "positions" | "activity" | "profile";
 type ActivityStatus = "completed" | "pending" | "failed";
+type BuyInFlowStep = "amount" | "review" | "processing" | "success";
+type BuyInProgress = "idle" | "approving" | "buying";
 
 interface PositionRecord {
   id: string;
@@ -73,7 +77,17 @@ interface PortfolioState {
   totalInvested: bigint;
   projectedPayout: bigint;
   lockPeriodSeconds: bigint;
+  buyInFeeBps: bigint;
+  yieldBps: bigint;
   positions: PositionRecord[];
+}
+
+interface BuyInDraft {
+  amountInput: string;
+  amountUnits: bigint;
+  feeAmount: bigint;
+  netPrincipal: bigint;
+  projectedPayout: bigint;
 }
 
 const INITIAL_PORTFOLIO: PortfolioState = {
@@ -84,6 +98,8 @@ const INITIAL_PORTFOLIO: PortfolioState = {
   totalInvested: BigInt(0),
   projectedPayout: BigInt(0),
   lockPeriodSeconds: BigInt(0),
+  buyInFeeBps: BigInt(0),
+  yieldBps: BigInt(0),
   positions: [],
 };
 
@@ -177,7 +193,18 @@ export default function Home() {
   const [portfolio, setPortfolio] = useState<PortfolioState>(INITIAL_PORTFOLIO);
   const [portfolioLoading, setPortfolioLoading] = useState(false);
 
-  const [investAmount, setInvestAmount] = useState("100");
+  const [buyInModalOpen, setBuyInModalOpen] = useState(false);
+  const [buyInStep, setBuyInStep] = useState<BuyInFlowStep>("amount");
+  const [buyInProgress, setBuyInProgress] = useState<BuyInProgress>("idle");
+  const [buyInAmountInput, setBuyInAmountInput] = useState("100");
+  const [buyInDraft, setBuyInDraft] = useState<BuyInDraft | null>(null);
+  const [buyInFlowError, setBuyInFlowError] = useState("");
+  const [buyInApproveTxHash, setBuyInApproveTxHash] = useState("");
+  const [buyInTxHash, setBuyInTxHash] = useState("");
+  const [claimModalOpen, setClaimModalOpen] = useState(false);
+  const [claimFlowError, setClaimFlowError] = useState("");
+  const [claimTxHash, setClaimTxHash] = useState("");
+
   const [actionError, setActionError] = useState("");
   const [activeAction, setActiveAction] = useState<string | null>(null);
 
@@ -219,6 +246,8 @@ export default function Home() {
           investedRaw,
           projectedRaw,
           lockPeriodRaw,
+          buyInFeeRaw,
+          yieldRaw,
           positionsRaw,
         ] = await Promise.all([
           queryToronetContractApi({
@@ -271,6 +300,18 @@ export default function Home() {
             address: activeSession.address,
             password: activeSession.password,
             contract: "loan-vault",
+            functionName: "buyInFeePercentage",
+          }),
+          queryToronetContractApi({
+            address: activeSession.address,
+            password: activeSession.password,
+            contract: "loan-vault",
+            functionName: "yieldPercentage",
+          }),
+          queryToronetContractApi({
+            address: activeSession.address,
+            password: activeSession.password,
+            contract: "loan-vault",
             functionName: "getPositions",
             args: [activeSession.address],
           }),
@@ -300,6 +341,8 @@ export default function Home() {
           totalInvested: extractBigIntValue(investedRaw) ?? BigInt(0),
           projectedPayout: extractBigIntValue(projectedRaw) ?? BigInt(0),
           lockPeriodSeconds,
+          buyInFeeBps: extractBigIntValue(buyInFeeRaw) ?? BigInt(0),
+          yieldBps: extractBigIntValue(yieldRaw) ?? BigInt(0),
           positions: parsePositions(positionsRaw, lockPeriodSeconds),
         });
       } catch (error) {
@@ -415,29 +458,13 @@ export default function Home() {
     }
   }
 
-  async function runAction(label: string, handler: () => Promise<void>) {
-    if (!session) {
-      return;
-    }
-
-    setActionError("");
-    setActiveAction(label);
-
-    try {
-      await handler();
-      await refreshPortfolio(session);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Action failed.";
-      setActionError(message);
-      addActivity(label, message, "failed");
-    } finally {
-      setActiveAction(null);
-    }
-  }
-
   function logout() {
     clearStoredSession();
     setSession(null);
+    setBuyInModalOpen(false);
+    setClaimModalOpen(false);
+    setClaimFlowError("");
+    setClaimTxHash("");
     setDisplayUsername("");
     setCopiedAddress(false);
     setPortfolio(INITIAL_PORTFOLIO);
@@ -459,71 +486,176 @@ export default function Home() {
     }
   }
 
-  async function approveAmount() {
-    if (!session) {
-      return;
-    }
-
-    const amountInUnits = toUnits(investAmount, portfolio.decimals);
-
-    const response = await writeToronetContractApi({
-      address: session.address,
-      password: session.password,
-      contract: "stablecoin",
-      functionName: "approve",
-      args: [vaultAddress, amountInUnits],
-    });
-
-    addActivity(
-      "Approval confirmed",
-      `Approved ${investAmount} ${portfolio.symbol} for vault usage.`,
-      "completed",
-      response,
-    );
+  function resetBuyInFlow() {
+    setBuyInStep("amount");
+    setBuyInProgress("idle");
+    setBuyInFlowError("");
+    setBuyInDraft(null);
+    setBuyInApproveTxHash("");
+    setBuyInTxHash("");
   }
 
-  async function buyIn() {
-    if (!session) {
-      return;
-    }
-
-    const amountInUnits = toUnits(investAmount, portfolio.decimals);
-
-    const response = await writeToronetContractApi({
-      address: session.address,
-      password: session.password,
-      contract: "loan-vault",
-      functionName: "buyIn",
-      args: [amountInUnits],
-    });
-
-    addActivity(
-      "Buy-in submitted",
-      `Submitted buyIn(${investAmount} ${portfolio.symbol}).`,
-      "completed",
-      response,
-    );
+  function openBuyInModal() {
+    resetBuyInFlow();
+    setBuyInAmountInput("100");
+    setBuyInModalOpen(true);
   }
 
-  async function claimPayout() {
+  function closeBuyInModal() {
+    if (buyInStep === "processing") {
+      return;
+    }
+
+    setBuyInModalOpen(false);
+    resetBuyInFlow();
+  }
+
+  function buildBuyInDraft(amountValue: string): BuyInDraft {
+    const normalized = amountValue.trim();
+    if (!normalized) {
+      throw new Error("Enter an amount to continue.");
+    }
+
+    const amountUnits = BigInt(toUnits(normalized, portfolio.decimals));
+    if (amountUnits <= BigInt(0)) {
+      throw new Error("Amount must be greater than zero.");
+    }
+
+    const feeAmount = (amountUnits * portfolio.buyInFeeBps) / BigInt(10000);
+    const netPrincipal = amountUnits - feeAmount;
+    const projectedPayout =
+      netPrincipal + (netPrincipal * portfolio.yieldBps) / BigInt(10000);
+
+    return {
+      amountInput: normalized,
+      amountUnits,
+      feeAmount,
+      netPrincipal,
+      projectedPayout,
+    };
+  }
+
+  function proceedBuyInReview() {
+    try {
+      const draft = buildBuyInDraft(buyInAmountInput);
+      setBuyInDraft(draft);
+      setBuyInFlowError("");
+      setBuyInStep("review");
+    } catch (error) {
+      setBuyInFlowError(error instanceof Error ? error.message : "Invalid amount.");
+    }
+  }
+
+  async function executeBuyInFlow() {
+    if (!session || !buyInDraft) {
+      return;
+    }
+
+    setActiveAction("buyIn-flow");
+    setBuyInFlowError("");
+    setBuyInStep("processing");
+    setBuyInProgress("approving");
+
+    try {
+      const approveResponse = await writeToronetContractApi({
+        address: session.address,
+        password: session.password,
+        contract: "stablecoin",
+        functionName: "approve",
+        args: [vaultAddress, buyInDraft.amountUnits],
+      });
+
+      const approveTxHash = extractTxHash(approveResponse) ?? "";
+      setBuyInApproveTxHash(approveTxHash);
+      addActivity(
+        "Approval confirmed",
+        `Approved ${buyInDraft.amountInput} ${portfolio.symbol} for vault usage.`,
+        "completed",
+        approveResponse,
+      );
+
+      setBuyInProgress("buying");
+
+      const buyInResponse = await writeToronetContractApi({
+        address: session.address,
+        password: session.password,
+        contract: "loan-vault",
+        functionName: "buyIn",
+        args: [buyInDraft.amountUnits],
+      });
+
+      const submittedTxHash = extractTxHash(buyInResponse) ?? "";
+      setBuyInTxHash(submittedTxHash);
+      addActivity(
+        "Buy-in submitted",
+        `Submitted buyIn(${buyInDraft.amountInput} ${portfolio.symbol}).`,
+        "completed",
+        buyInResponse,
+      );
+
+      await refreshPortfolio(session);
+      setBuyInStep("success");
+      setBuyInProgress("idle");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Buy-in flow failed.";
+      setBuyInProgress("idle");
+      setBuyInStep("review");
+      setBuyInFlowError(message);
+      addActivity("Buy-in flow", message, "failed");
+    } finally {
+      setActiveAction(null);
+    }
+  }
+
+  function openClaimModal() {
+    setClaimFlowError("");
+    setClaimTxHash("");
+    setClaimModalOpen(true);
+  }
+
+  function closeClaimModal() {
+    if (activeAction === "claimPayout") {
+      return;
+    }
+
+    setClaimModalOpen(false);
+    setClaimFlowError("");
+  }
+
+  async function executeClaimPayout() {
     if (!session) {
       return;
     }
 
-    const response = await writeToronetContractApi({
-      address: session.address,
-      password: session.password,
-      contract: "loan-vault",
-      functionName: "claimPayout",
-      args: [session.address],
-    });
+    setActionError("");
+    setClaimFlowError("");
+    setActiveAction("claimPayout");
 
-    addActivity(
-      "Payout claimed",
-      "Submitted claimPayout for matured positions.",
-      "completed",
-      response,
-    );
+    try {
+      const response = await writeToronetContractApi({
+        address: session.address,
+        password: session.password,
+        contract: "loan-vault",
+        functionName: "claimPayout",
+        args: [session.address],
+      });
+
+      setClaimTxHash(extractTxHash(response) ?? "");
+      addActivity(
+        "Payout claimed",
+        "Submitted claimPayout for matured positions.",
+        "completed",
+        response,
+      );
+      await refreshPortfolio(session);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Claim payout failed.";
+      setClaimFlowError(message);
+      setActionError(message);
+      addActivity("claimPayout", message, "failed");
+    } finally {
+      setActiveAction(null);
+    }
   }
 
   if (!hydrated) {
@@ -539,11 +671,11 @@ export default function Home() {
   if (!session) {
     return (
       <main className="vault-shell flex min-h-screen items-center justify-center px-5 py-12">
-        <section className="vault-card w-full max-w-xl p-8 md:p-10">
-          <div className="inline-flex rounded-full bg-[var(--color-primary-100)] p-3 text-[var(--color-primary-700)]">
+        <section className="vault-card w-full max-w-xl border border-[var(--color-border)] bg-white/92 p-8 shadow-[0_24px_56px_rgb(16_36_58_/_16%)] backdrop-blur md:p-10">
+          <div className="inline-flex rounded-full bg-[linear-gradient(135deg,rgb(223_237_248),rgb(205_229_247))] p-3 text-[var(--color-primary-700)]">
             <Landmark size={22} />
           </div>
-          <h1 className="mt-5 text-4xl font-bold leading-tight tracking-tight">BizMarket Vault</h1>
+          <h1 className="mt-5 text-4xl font-bold leading-tight tracking-tight md:text-5xl">BizMarket Vault</h1>
           <p className="mt-4 text-base leading-7 text-[var(--color-text-secondary)]">
             Authenticate with Toronet credentials to interact with LoanVault directly via the
             Toronet API.
@@ -631,7 +763,7 @@ export default function Home() {
   return (
     <main className="vault-shell min-h-screen pb-24">
       <div className="mx-auto flex w-full max-w-6xl flex-col px-4 py-4 md:px-8 md:py-6">
-        <header className="vault-card sticky top-3 z-30 mb-5 flex flex-wrap items-center justify-between gap-3 bg-white/90 px-5 py-4 backdrop-blur">
+        <header className="vault-card sticky top-3 z-30 mb-5 flex flex-wrap items-center justify-between gap-3 border border-[var(--color-border)] bg-white/86 px-5 py-4 shadow-[0_14px_28px_rgb(16_36_58_/_10%)] backdrop-blur">
           <div>
             <p className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-tertiary)]">
               BizMarket Vault
@@ -701,37 +833,31 @@ export default function Home() {
 
               <div className="grid gap-4 md:grid-cols-2">
                 <Card title="Buy In" subtitle="Approve stablecoin and call buyIn">
-                  <div className="space-y-3">
-                    <Field label="Amount">
-                      <input
-                        value={investAmount}
-                        onChange={(event) => setInvestAmount(event.target.value)}
-                        className="h-12 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white px-3 text-sm outline-none"
-                        inputMode="decimal"
-                        placeholder="100"
-                      />
-                    </Field>
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      <Button
-                        disabled={activeAction !== null || !investAmount}
-                        onClick={() => {
-                          void runAction("Approve", approveAmount);
-                        }}
-                      >
-                        <ShieldCheck size={16} />
-                        {activeAction === "Approve" ? "Approving..." : "Approve"}
-                      </Button>
-                      <Button
-                        variant="secondary"
-                        disabled={activeAction !== null || !investAmount}
-                        onClick={() => {
-                          void runAction("buyIn", buyIn);
-                        }}
-                      >
-                        <Coins size={16} />
-                        {activeAction === "buyIn" ? "Submitting..." : "buyIn"}
-                      </Button>
+                  <div className="space-y-4">
+                    <p className="text-sm text-[var(--color-text-secondary)]">
+                      Start a guided flow to enter amount, review fee/yield breakdown, and submit
+                      approve + buyIn automatically after one final confirmation.
+                    </p>
+                    <div className="grid gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-sm text-[var(--color-text-secondary)] sm:grid-cols-3">
+                      <span>
+                        Fee: <strong>{portfolio.buyInFeeBps.toString()} bps</strong>
+                      </span>
+                      <span>
+                        Yield: <strong>{portfolio.yieldBps.toString()} bps</strong>
+                      </span>
+                      <span>
+                        Symbol: <strong>{portfolio.symbol}</strong>
+                      </span>
                     </div>
+                    <Button
+                      fullWidth
+                      disabled={activeAction !== null || portfolioLoading}
+                      onClick={openBuyInModal}
+                    >
+                      <Coins size={16} />
+                      Start Buy-In Flow
+                      <ArrowRight size={16} />
+                    </Button>
                   </div>
                 </Card>
 
@@ -745,9 +871,7 @@ export default function Home() {
                         activeAction !== null ||
                         portfolio.availablePayout <= BigInt(0)
                       }
-                      onClick={() => {
-                        void runAction("claimPayout", claimPayout);
-                      }}
+                      onClick={openClaimModal}
                     >
                       <HandCoins size={16} />
                       {activeAction === "claimPayout" ? "Claiming..." : "claimPayout"}
@@ -865,6 +989,215 @@ export default function Home() {
           ) : null}
         </div>
 
+        <Modal
+          isOpen={buyInModalOpen}
+          title="Buy In Flow"
+          subtitle={
+            buyInStep === "amount"
+              ? "Step 1/3: Enter amount"
+              : buyInStep === "review"
+                ? "Step 2/3: Review transaction details"
+                : buyInStep === "processing"
+                  ? "Step 3/3: Submitting approve + buyIn"
+                  : "Completed"
+          }
+          onClose={closeBuyInModal}
+          footer={
+            buyInStep === "amount" ? (
+              <>
+                <Button variant="ghost" className="flex-1" onClick={closeBuyInModal}>
+                  Cancel
+                </Button>
+                <Button className="flex-1" onClick={proceedBuyInReview}>
+                  Continue
+                  <ArrowRight size={16} />
+                </Button>
+              </>
+            ) : buyInStep === "review" ? (
+              <>
+                <Button
+                  variant="ghost"
+                  className="flex-1"
+                  onClick={() => {
+                    setBuyInStep("amount");
+                    setBuyInFlowError("");
+                  }}
+                >
+                  Back
+                </Button>
+                <Button className="flex-1" disabled={activeAction !== null} onClick={() => {
+                  void executeBuyInFlow();
+                }}>
+                  Confirm and Execute
+                </Button>
+              </>
+            ) : buyInStep === "processing" ? (
+              <Button fullWidth disabled>
+                <LoaderCircle className="animate-spin" size={16} />
+                Processing...
+              </Button>
+            ) : (
+              <Button fullWidth onClick={closeBuyInModal}>
+                <CircleCheckBig size={16} />
+                Done
+              </Button>
+            )
+          }
+        >
+          <div className="space-y-4">
+            {buyInStep === "amount" ? (
+              <>
+                <Field label={`Amount (${portfolio.symbol})`} hint="This amount will be approved and then supplied to buyIn.">
+                  <input
+                    value={buyInAmountInput}
+                    onChange={(event) => setBuyInAmountInput(event.target.value)}
+                    className="h-12 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white px-3 text-sm outline-none"
+                    inputMode="decimal"
+                    placeholder="100"
+                  />
+                </Field>
+                <div className="rounded-[var(--radius-md)] border border-[var(--color-info-100)] bg-[var(--color-info-100)] px-3 py-2 text-sm text-[var(--color-info-700)]">
+                  Only one final confirmation is required. After you confirm, the app submits
+                  approve and buyIn back-to-back.
+                </div>
+              </>
+            ) : null}
+
+            {buyInStep === "review" && buyInDraft ? (
+              <>
+                <div className="grid gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-sm text-[var(--color-text-secondary)]">
+                  <p>
+                    Gross amount: <strong>{buyInDraft.amountInput} {portfolio.symbol}</strong>
+                  </p>
+                  <p>
+                    Buy-in fee ({portfolio.buyInFeeBps.toString()} bps): <strong>{formatToken(buyInDraft.feeAmount)}</strong>
+                  </p>
+                  <p>
+                    Net principal: <strong>{formatToken(buyInDraft.netPrincipal)}</strong>
+                  </p>
+                  <p>
+                    Projected payout ({portfolio.yieldBps.toString()} bps): <strong>{formatToken(buyInDraft.projectedPayout)}</strong>
+                  </p>
+                  <p>
+                    Wallet after buy-in:
+                    <strong>
+                      {" "}
+                      {formatToken(
+                        portfolio.stablecoinBalance > buyInDraft.amountUnits
+                          ? portfolio.stablecoinBalance - buyInDraft.amountUnits
+                          : BigInt(0),
+                      )}
+                    </strong>
+                  </p>
+                </div>
+                <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white px-3 py-2 text-sm text-[var(--color-text-secondary)]">
+                  <p className="font-semibold text-[var(--color-text-primary)]">Transaction sequence</p>
+                  <p className="mt-1">1. approve(vault, amount)</p>
+                  <p>2. buyIn(amount)</p>
+                </div>
+              </>
+            ) : null}
+
+            {buyInStep === "processing" ? (
+              <div className="space-y-3 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-sm">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="font-semibold text-[var(--color-text-primary)]">Approve transaction</span>
+                  <span className="text-[var(--color-text-secondary)]">
+                    {buyInProgress === "approving"
+                      ? "Submitting..."
+                      : buyInApproveTxHash
+                        ? "Completed"
+                        : "Pending"}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="font-semibold text-[var(--color-text-primary)]">buyIn transaction</span>
+                  <span className="text-[var(--color-text-secondary)]">
+                    {buyInProgress === "buying"
+                      ? "Submitting..."
+                      : buyInTxHash
+                        ? "Completed"
+                        : "Pending"}
+                  </span>
+                </div>
+              </div>
+            ) : null}
+
+            {buyInStep === "success" ? (
+              <div className="space-y-2 rounded-[var(--radius-md)] border border-[var(--color-success-100)] bg-[var(--color-success-100)] px-3 py-3 text-sm text-[var(--color-success-700)]">
+                <p className="font-semibold">Buy-in flow completed successfully.</p>
+                {buyInApproveTxHash ? <p className="break-all">Approve Tx: {buyInApproveTxHash}</p> : null}
+                {buyInTxHash ? <p className="break-all">BuyIn Tx: {buyInTxHash}</p> : null}
+              </div>
+            ) : null}
+
+            {buyInFlowError ? (
+              <p className="rounded-[var(--radius-md)] border border-[var(--color-error-100)] bg-[var(--color-error-100)] px-3 py-2 text-sm text-[var(--color-error-700)]">
+                {buyInFlowError}
+              </p>
+            ) : null}
+          </div>
+        </Modal>
+
+        <Modal
+          isOpen={claimModalOpen}
+          title="Claim Payout"
+          subtitle="Confirm payout destination and submit transaction"
+          onClose={closeClaimModal}
+          footer={
+            claimTxHash ? (
+              <Button fullWidth onClick={closeClaimModal}>
+                <CircleCheckBig size={16} />
+                Done
+              </Button>
+            ) : (
+              <>
+                <Button variant="ghost" className="flex-1" onClick={closeClaimModal}>
+                  Cancel
+                </Button>
+                <Button
+                  className="flex-1"
+                  disabled={activeAction === "claimPayout" || portfolio.availablePayout <= BigInt(0)}
+                  onClick={() => {
+                    void executeClaimPayout();
+                  }}
+                >
+                  {activeAction === "claimPayout" ? (
+                    <>
+                      <LoaderCircle className="animate-spin" size={16} />
+                      Processing...
+                    </>
+                  ) : (
+                    "Confirm Claim"
+                  )}
+                </Button>
+              </>
+            )
+          }
+        >
+          <div className="space-y-3 text-sm">
+            <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-[var(--color-text-secondary)]">
+              <p>
+                Claimable amount: <strong>{formatToken(portfolio.availablePayout)}</strong>
+              </p>
+              <p className="mt-1">
+                Receiver address: <strong>{shortAddress(session.address)}</strong>
+              </p>
+            </div>
+            {claimTxHash ? (
+              <div className="rounded-[var(--radius-md)] border border-[var(--color-success-100)] bg-[var(--color-success-100)] p-3 text-[var(--color-success-700)]">
+                <p className="font-semibold">Claim transaction submitted.</p>
+                <p className="mt-1 break-all text-xs">Tx: {claimTxHash}</p>
+              </div>
+            ) : null}
+            {claimFlowError ? (
+              <p className="rounded-[var(--radius-md)] border border-[var(--color-error-100)] bg-[var(--color-error-100)] px-3 py-2 text-sm text-[var(--color-error-700)]">
+                {claimFlowError}
+              </p>
+            ) : null}
+          </div>
+        </Modal>
+
         <nav className="fixed bottom-3 left-3 right-3 z-30 rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-white/95 p-2 shadow-[0_14px_28px_rgb(15_23_40_/_12%)] backdrop-blur lg:hidden">
           <ul className="grid grid-cols-4 gap-1">
             {[
@@ -887,9 +1220,9 @@ export default function Home() {
                   <span>{option.label}</span>
                 </button>
               </li>
-            ))}
-          </ul>
-        </nav>
+              ))}
+            </ul>
+            </nav>
       </div>
     </main>
   );
