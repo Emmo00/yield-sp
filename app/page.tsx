@@ -2,317 +2,554 @@
 
 import {
   Activity,
-  ArrowRight,
-  CheckCircle2,
-  CircleDollarSign,
   Coins,
   HandCoins,
   Landmark,
+  LogOut,
   RefreshCcw,
   ShieldCheck,
   UserCircle2,
-  Wallet,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import Link from "next/link";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { Badge, Button, Card, Field, MetricCard, Modal, Segmented } from "@/app/components/vault-ui";
+import { Badge, Button, Card, Field, MetricCard, Segmented } from "@/app/components/vault-ui";
 import {
-  daysUntil,
-  formatDate,
-  formatMoney,
-  getInvestmentStatus,
-  getProjectedPayout,
-  shortAddress,
-} from "@/app/lib/format";
-import { scenario } from "@/app/lib/mock-data";
-import type {
-  ActivityItem,
-  Investment,
-  InvestmentStatus,
-  MockScenario,
-  WalletStatus,
-} from "@/app/lib/types";
+  getConfiguredNetwork,
+  getContractAddress,
+  type NetworkEnv,
+} from "@/app/lib/constants";
+import { formatDate, shortAddress } from "@/app/lib/format";
+import {
+  callToronetContractApi,
+  loginWithToronet,
+  signupWithToronet,
+} from "@/app/lib/toronet-client";
+import {
+  extractBigIntValue,
+  extractResultValue,
+  extractTxHash,
+} from "@/app/lib/toronet-common";
+import {
+  clearStoredSession,
+  getStoredSession,
+  saveStoredSession,
+  type ToronetSession,
+} from "@/app/lib/session";
+import { formatUnits, toUnits } from "@/app/lib/units";
 
-type UserTab = "home" | "investments" | "withdraw" | "activity" | "profile";
-type AdminTab = "overview" | "funding" | "parameters" | "transfers" | "activity";
-type InvestStep = "amount" | "review" | "approve" | "confirm" | "success";
-type WithdrawStep = "review" | "confirm" | "success";
-type FundingStep = "review" | "approve" | "confirm" | "success";
+type AuthMode = "login" | "signup";
+type UserTab = "home" | "positions" | "activity" | "profile";
+type ActivityStatus = "completed" | "pending" | "failed";
+
+interface PositionRecord {
+  id: string;
+  principal: bigint;
+  payoutAmount: bigint;
+  startTime: bigint;
+  maturityTime: bigint;
+  status: "locked" | "ready";
+}
+
+interface ActivityRecord {
+  id: string;
+  title: string;
+  detail: string;
+  when: string;
+  status: ActivityStatus;
+  txHash?: string;
+}
+
+interface PortfolioState {
+  decimals: number;
+  symbol: string;
+  stablecoinBalance: bigint;
+  availablePayout: bigint;
+  totalInvested: bigint;
+  projectedPayout: bigint;
+  lockPeriodSeconds: bigint;
+  positions: PositionRecord[];
+}
+
+const INITIAL_PORTFOLIO: PortfolioState = {
+  decimals: 18,
+  symbol: "ESPEES",
+  stablecoinBalance: BigInt(0),
+  availablePayout: BigInt(0),
+  totalInvested: BigInt(0),
+  projectedPayout: BigInt(0),
+  lockPeriodSeconds: BigInt(0),
+  positions: [],
+};
+
+function parsePositions(value: unknown, lockPeriodSeconds: bigint): PositionRecord[] {
+  const extracted = extractResultValue(value);
+  let candidates: unknown[] = [];
+
+  if (Array.isArray(extracted)) {
+    candidates = extracted;
+  } else if (typeof extracted === "string") {
+    try {
+      const parsed = JSON.parse(extracted) as unknown;
+      if (Array.isArray(parsed)) {
+        candidates = parsed;
+      }
+    } catch {
+      candidates = [];
+    }
+  } else if (extracted && typeof extracted === "object") {
+    const objectValues = Object.values(extracted as Record<string, unknown>);
+    const arrayValue = objectValues.find((entry) => Array.isArray(entry));
+    if (Array.isArray(arrayValue)) {
+      candidates = arrayValue;
+    }
+  }
+
+  const now = BigInt(Math.floor(Date.now() / 1000));
+
+  return candidates
+    .map((candidate, index) => {
+      if (Array.isArray(candidate)) {
+        const principal = extractBigIntValue(candidate[0]) ?? BigInt(0);
+        const startTime = extractBigIntValue(candidate[1]) ?? BigInt(0);
+        const payoutAmount = extractBigIntValue(candidate[2]) ?? BigInt(0);
+        const maturityTime = startTime + lockPeriodSeconds;
+
+        return {
+          id: `POS-${index + 1}`,
+          principal,
+          payoutAmount,
+          startTime,
+          maturityTime,
+          status: maturityTime <= now ? "ready" : "locked",
+        } satisfies PositionRecord;
+      }
+
+      if (!candidate || typeof candidate !== "object") {
+        return null;
+      }
+
+      const record = candidate as Record<string, unknown>;
+      const principal = extractBigIntValue(record.principal) ?? BigInt(0);
+      const startTime = extractBigIntValue(record.startTime) ?? BigInt(0);
+      const payoutAmount = extractBigIntValue(record.payoutAmount) ?? BigInt(0);
+      const maturityTime = startTime + lockPeriodSeconds;
+
+      return {
+        id: `POS-${index + 1}`,
+        principal,
+        payoutAmount,
+        startTime,
+        maturityTime,
+        status: maturityTime <= now ? "ready" : "locked",
+      } satisfies PositionRecord;
+    })
+    .filter((item): item is PositionRecord => Boolean(item));
+}
 
 export default function Home() {
-  const [walletStatus, setWalletStatus] = useState<WalletStatus>("disconnected");
-  const [walletModalOpen, setWalletModalOpen] = useState(false);
-
-  const [userTab, setUserTab] = useState<UserTab>("home");
-  const [adminTab, setAdminTab] = useState<AdminTab>("overview");
-
-  const [data, setData] = useState<MockScenario>(scenario);
-  const [selectedInvestmentId, setSelectedInvestmentId] = useState<string | null>(null);
-
-  const [investModalOpen, setInvestModalOpen] = useState(false);
-  const [investStep, setInvestStep] = useState<InvestStep>("amount");
-  const [investAmount, setInvestAmount] = useState("500");
-  const [needsApproval, setNeedsApproval] = useState(true);
-
-  const [withdrawModalOpen, setWithdrawModalOpen] = useState(false);
-  const [withdrawStep, setWithdrawStep] = useState<WithdrawStep>("review");
-
-  const [fundingModalOpen, setFundingModalOpen] = useState(false);
-  const [fundingStep, setFundingStep] = useState<FundingStep>("review");
-  const showLegacyAdminPanel = false;
-
-  const derivedInvestments = useMemo(
-    () =>
-      data.investments.map((investment) => ({
-        ...investment,
-        status: getInvestmentStatus(investment, data.nowIso, data.vault),
-        projectedPayout: getProjectedPayout(
-          investment.principal,
-          investment.entryFeeRate,
-          investment.projectedReturnRate,
-        ),
-      })),
-    [data],
+  const network = useMemo<NetworkEnv>(() => getConfiguredNetwork(), []);
+  const vaultAddress = useMemo(() => getContractAddress("loan-vault", network), [network]);
+  const stablecoinAddress = useMemo(
+    () => getContractAddress("stablecoin", network),
+    [network],
   );
 
-  const readyInvestments = derivedInvestments.filter((investment) => investment.status === "ready");
-  const activeInvestments = derivedInvestments.filter(
-    (investment) => investment.status === "locked" || investment.status === "awaiting_funding",
-  );
-  const withdrawnInvestments = derivedInvestments.filter(
-    (investment) => investment.status === "withdrawn",
-  );
+  const [hydrated, setHydrated] = useState(false);
+  const [session, setSession] = useState<ToronetSession | null>(null);
 
-  const selectedInvestment = derivedInvestments.find(
-    (investment) => investment.id === selectedInvestmentId,
-  );
+  const [authMode, setAuthMode] = useState<AuthMode>("login");
+  const [identifier, setIdentifier] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [authError, setAuthError] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
 
-  const investNumeric = Number(investAmount);
-  const isInvestAmountValid =
-    Number.isFinite(investNumeric) &&
-    investNumeric > 0 &&
-    investNumeric >= data.admin.protocolParameters.minimumInvestment &&
-    investNumeric <= data.profile.stablecoinBalance;
+  const [tab, setTab] = useState<UserTab>("home");
+  const [portfolio, setPortfolio] = useState<PortfolioState>(INITIAL_PORTFOLIO);
+  const [portfolioLoading, setPortfolioLoading] = useState(false);
 
-  const investFee = isInvestAmountValid
-    ? investNumeric * data.admin.protocolParameters.entryFeeRate
-    : 0;
-  const investNet = Math.max(0, investNumeric - investFee);
-  const investProjected = isInvestAmountValid
-    ? getProjectedPayout(
-        investNumeric,
-        data.admin.protocolParameters.entryFeeRate,
-        data.admin.protocolParameters.projectedReturnRate,
-      )
-    : 0;
+  const [investAmount, setInvestAmount] = useState("100");
+  const [actionError, setActionError] = useState("");
+  const [activeAction, setActiveAction] = useState<string | null>(null);
 
-  const totalReadyAmount = readyInvestments.reduce(
-    (sum, investment) => sum + investment.projectedPayout,
-    0,
-  );
+  const [activity, setActivity] = useState<ActivityRecord[]>([]);
 
-  const statusBanner =
-    data.vault.status === "healthy"
-      ? {
-          tone: "success" as const,
-          title: "Vault funded and operating normally",
-          body: "Matured investments can be withdrawn as soon as they become eligible.",
-        }
-      : {
-          tone: "warning" as const,
-          title: "Some matured withdrawals may be delayed until the vault is funded",
-          body: "Maturity date is reached, but liquidity is being replenished.",
-        };
-
-  function openInvest() {
-    setInvestStep("amount");
-    setInvestModalOpen(true);
-  }
-
-  function connectWallet() {
-    setWalletStatus("connecting");
-    window.setTimeout(() => {
-      setWalletStatus("connected");
-      setWalletModalOpen(false);
-      setUserTab("home");
-    }, 700);
-  }
-
-  function submitInvestment() {
-    const newInvestment: Investment = {
-      id: `INV-${Math.floor(3000 + Math.random() * 3000)}`,
-      principal: investNumeric,
-      entryFeeRate: data.admin.protocolParameters.entryFeeRate,
-      projectedReturnRate: data.admin.protocolParameters.projectedReturnRate,
-      startedAt: data.nowIso,
-      maturesAt: new Date(
-        new Date(data.nowIso).getTime() +
-          data.admin.protocolParameters.lockWeeks * 7 * 24 * 60 * 60 * 1000,
-      ).toISOString(),
-      txHash: `0x${Math.random().toString(16).slice(2, 18)}`,
-    };
-
-    setData((prev) => ({
-      ...prev,
-      profile: {
-        ...prev.profile,
-        stablecoinBalance: prev.profile.stablecoinBalance - investNumeric,
-      },
-      investments: [newInvestment, ...prev.investments],
-      userActivity: [
+  const addActivity = useCallback(
+    (title: string, detail: string, status: ActivityStatus, response?: unknown) => {
+      setActivity((previous) => [
         {
-          id: `UA-${prev.userActivity.length + 1}`,
-          type: "investment_created",
-          title: "Investment created",
-          description: `${newInvestment.id} locked for ${prev.admin.protocolParameters.lockWeeks} weeks.`,
-          amount: investNumeric,
-          date: prev.nowIso,
-          status: "completed",
-          txHash: newInvestment.txHash,
+          id: `ACT-${Date.now()}`,
+          title,
+          detail,
+          status,
+          when: new Date().toISOString(),
+          txHash: extractTxHash(response) ?? undefined,
         },
-        ...prev.userActivity,
-      ],
-    }));
+        ...previous,
+      ]);
+    },
+    [],
+  );
 
-    setInvestStep("success");
+  const formatToken = useCallback(
+    (value: bigint, precision = 2) => `${formatUnits(value, portfolio.decimals, precision)} ${portfolio.symbol}`,
+    [portfolio.decimals, portfolio.symbol],
+  );
+
+  const refreshPortfolio = useCallback(
+    async (activeSession: ToronetSession) => {
+      setPortfolioLoading(true);
+      setActionError("");
+
+      try {
+        const [
+          decimalsRaw,
+          symbolRaw,
+          balanceRaw,
+          availableRaw,
+          investedRaw,
+          projectedRaw,
+          lockPeriodRaw,
+          positionsRaw,
+        ] = await Promise.all([
+          callToronetContractApi({
+            address: activeSession.address,
+            password: activeSession.password,
+            contract: "stablecoin",
+            functionName: "decimals",
+          }),
+          callToronetContractApi({
+            address: activeSession.address,
+            password: activeSession.password,
+            contract: "stablecoin",
+            functionName: "symbol",
+          }),
+          callToronetContractApi({
+            address: activeSession.address,
+            password: activeSession.password,
+            contract: "stablecoin",
+            functionName: "balanceOf",
+            args: [activeSession.address],
+          }),
+          callToronetContractApi({
+            address: activeSession.address,
+            password: activeSession.password,
+            contract: "loan-vault",
+            functionName: "availablePayout",
+            args: [activeSession.address],
+          }),
+          callToronetContractApi({
+            address: activeSession.address,
+            password: activeSession.password,
+            contract: "loan-vault",
+            functionName: "totalInvested",
+            args: [activeSession.address],
+          }),
+          callToronetContractApi({
+            address: activeSession.address,
+            password: activeSession.password,
+            contract: "loan-vault",
+            functionName: "projectedPayout",
+            args: [activeSession.address],
+          }),
+          callToronetContractApi({
+            address: activeSession.address,
+            password: activeSession.password,
+            contract: "loan-vault",
+            functionName: "LOCK_PERIOD",
+          }),
+          callToronetContractApi({
+            address: activeSession.address,
+            password: activeSession.password,
+            contract: "loan-vault",
+            functionName: "getPositions",
+            args: [activeSession.address],
+          }),
+        ]);
+
+        const parsedDecimals = extractBigIntValue(decimalsRaw);
+        const decimals =
+          parsedDecimals !== null &&
+          parsedDecimals >= BigInt(0) &&
+          parsedDecimals <= BigInt(36)
+            ? Number(parsedDecimals)
+            : 18;
+
+        const symbolResult = extractResultValue(symbolRaw);
+        const symbol =
+          typeof symbolResult === "string" && symbolResult.trim().length > 0
+            ? symbolResult.trim()
+            : "ESPEES";
+
+        const lockPeriodSeconds = extractBigIntValue(lockPeriodRaw) ?? BigInt(0);
+
+        setPortfolio({
+          decimals,
+          symbol,
+          stablecoinBalance: extractBigIntValue(balanceRaw) ?? BigInt(0),
+          availablePayout: extractBigIntValue(availableRaw) ?? BigInt(0),
+          totalInvested: extractBigIntValue(investedRaw) ?? BigInt(0),
+          projectedPayout: extractBigIntValue(projectedRaw) ?? BigInt(0),
+          lockPeriodSeconds,
+          positions: parsePositions(positionsRaw, lockPeriodSeconds),
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to refresh portfolio.";
+        setActionError(message);
+      } finally {
+        setPortfolioLoading(false);
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    const existingSession = getStoredSession();
+    setSession(existingSession);
+    setHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!session) {
+      return;
+    }
+
+    void refreshPortfolio(session);
+  }, [session, refreshPortfolio]);
+
+  async function handleLogin() {
+    setAuthError("");
+    setAuthLoading(true);
+
+    try {
+      const response = await loginWithToronet(identifier, password);
+      const newSession: ToronetSession = {
+        identifier,
+        address: response.address,
+        password,
+        loggedInAt: new Date().toISOString(),
+      };
+
+      saveStoredSession(newSession);
+      setSession(newSession);
+      setPassword("");
+      setIdentifier("");
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : "Login failed.");
+    } finally {
+      setAuthLoading(false);
+    }
   }
 
-  function submitWithdraw() {
-    const now = data.nowIso;
-    const ids = new Set(readyInvestments.map((investment) => investment.id));
+  async function handleSignup() {
+    setAuthError("");
+    setAuthLoading(true);
 
-    setData((prev) => ({
-      ...prev,
-      investments: prev.investments.map((investment) =>
-        ids.has(investment.id) ? { ...investment, withdrawnAt: now } : investment,
-      ),
-      profile: {
-        ...prev.profile,
-        stablecoinBalance: prev.profile.stablecoinBalance + totalReadyAmount,
-      },
-      userActivity: [
-        {
-          id: `UA-${prev.userActivity.length + 1}`,
-          type: "withdrawal_completed",
-          title: "Withdrawal completed",
-          description: "Returns sent to destination wallet.",
-          amount: totalReadyAmount,
-          date: now,
-          status: "completed",
-          txHash: `0x${Math.random().toString(16).slice(2, 18)}`,
-        },
-        ...prev.userActivity,
-      ],
-      vault: {
-        ...prev.vault,
-        availableToWithdraw: 0,
-      },
-    }));
+    try {
+      const response = await signupWithToronet(username, password);
+      const newSession: ToronetSession = {
+        identifier: username,
+        username,
+        address: response.address,
+        password,
+        loggedInAt: new Date().toISOString(),
+      };
 
-    setWithdrawStep("success");
+      saveStoredSession(newSession);
+      setSession(newSession);
+      setPassword("");
+      setUsername("");
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : "Sign-up failed.");
+    } finally {
+      setAuthLoading(false);
+    }
   }
 
-  function submitFundVault() {
-    setData((prev) => ({
-      ...prev,
-      vault: {
-        ...prev.vault,
-        shortfall: 0,
-        status: "healthy",
-        availableToWithdraw: prev.vault.availableToWithdraw + prev.vault.shortfall,
-      },
-      admin: {
-        ...prev.admin,
-        fundingWalletBalance: prev.admin.fundingWalletBalance - prev.vault.shortfall,
-        activity: [
-          {
-            id: `AA-${prev.admin.activity.length + 1}`,
-            type: "vault_funded",
-            title: "Vault funded",
-            description: "Outstanding payout obligations covered.",
-            amount: prev.vault.shortfall,
-            date: prev.nowIso,
-            status: "completed",
-            txHash: `0x${Math.random().toString(16).slice(2, 18)}`,
-          },
-          ...prev.admin.activity,
-        ],
-      },
-    }));
+  async function runAction(label: string, handler: () => Promise<void>) {
+    if (!session) {
+      return;
+    }
 
-    setFundingStep("success");
+    setActionError("");
+    setActiveAction(label);
+
+    try {
+      await handler();
+      await refreshPortfolio(session);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Action failed.";
+      setActionError(message);
+      addActivity(label, message, "failed");
+    } finally {
+      setActiveAction(null);
+    }
   }
 
-  if (walletStatus !== "connected") {
+  function logout() {
+    clearStoredSession();
+    setSession(null);
+    setPortfolio(INITIAL_PORTFOLIO);
+    setActivity([]);
+    setTab("home");
+  }
+
+  async function approveAmount() {
+    if (!session) {
+      return;
+    }
+
+    const amountInUnits = toUnits(investAmount, portfolio.decimals);
+
+    const response = await callToronetContractApi({
+      address: session.address,
+      password: session.password,
+      contract: "stablecoin",
+      functionName: "approve",
+      args: [vaultAddress, amountInUnits],
+    });
+
+    addActivity(
+      "Approval confirmed",
+      `Approved ${investAmount} ${portfolio.symbol} for vault usage.`,
+      "completed",
+      response,
+    );
+  }
+
+  async function buyIn() {
+    if (!session) {
+      return;
+    }
+
+    const amountInUnits = toUnits(investAmount, portfolio.decimals);
+
+    const response = await callToronetContractApi({
+      address: session.address,
+      password: session.password,
+      contract: "loan-vault",
+      functionName: "buyIn",
+      args: [amountInUnits],
+    });
+
+    addActivity(
+      "Buy-in submitted",
+      `Submitted buyIn(${investAmount} ${portfolio.symbol}).`,
+      "completed",
+      response,
+    );
+  }
+
+  async function claimPayout() {
+    if (!session) {
+      return;
+    }
+
+    const response = await callToronetContractApi({
+      address: session.address,
+      password: session.password,
+      contract: "loan-vault",
+      functionName: "claimPayout",
+      args: [session.address],
+    });
+
+    addActivity(
+      "Payout claimed",
+      "Submitted claimPayout for matured positions.",
+      "completed",
+      response,
+    );
+  }
+
+  if (!hydrated) {
+    return (
+      <main className="vault-shell flex min-h-screen items-center justify-center px-5 py-12">
+        <section className="vault-card w-full max-w-xl p-8 md:p-10">
+          <p className="text-sm text-[var(--color-text-secondary)]">Loading session...</p>
+        </section>
+      </main>
+    );
+  }
+
+  if (!session) {
     return (
       <main className="vault-shell flex min-h-screen items-center justify-center px-5 py-12">
         <section className="vault-card w-full max-w-xl p-8 md:p-10">
           <div className="inline-flex rounded-full bg-[var(--color-primary-100)] p-3 text-[var(--color-primary-700)]">
             <Landmark size={22} />
           </div>
-          <h1 className="mt-5 text-4xl font-bold leading-tight tracking-tight">
-            Welcome to BizMarket Vault
-          </h1>
+          <h1 className="mt-5 text-4xl font-bold leading-tight tracking-tight">BizMarket Vault</h1>
           <p className="mt-4 text-base leading-7 text-[var(--color-text-secondary)]">
-            Grow stablecoin deposits with fixed-term vault investments. Invest once,
-            track your maturity date, and withdraw returns when your investment becomes
-            available.
+            Authenticate with Toronet credentials to interact with LoanVault directly via the
+            Toronet API.
           </p>
 
-          <div className="mt-6 grid gap-3 sm:grid-cols-3">
-            {[
-              "Fixed 12-week lock",
-              "Clear projected returns",
-              "Simple withdrawal flow",
-            ].map((item) => (
-              <div key={item} className="vault-card-soft rounded-[var(--radius-md)] p-3 text-sm font-medium">
-                {item}
-              </div>
-            ))}
+          <div className="mt-5 rounded-[var(--radius-md)] border border-[var(--color-info-100)] bg-[var(--color-info-100)] px-4 py-3 text-sm text-[var(--color-info-700)]">
+            Network: <strong>{network}</strong>
           </div>
 
-          <div className="mt-6 rounded-[var(--radius-md)] border border-[var(--color-warning-100)] bg-[var(--color-warning-100)] px-4 py-3 text-sm text-[var(--color-warning-700)]">
-            Withdrawals become available after maturity and depend on vault funding status.
+          <div className="mt-6">
+            <Segmented
+              value={authMode}
+              onChange={setAuthMode}
+              options={[
+                { value: "login", label: "Login" },
+                { value: "signup", label: "Sign Up" },
+              ]}
+            />
           </div>
 
-          <div className="mt-6 flex flex-col gap-3 sm:flex-row">
-            <Button fullWidth onClick={() => setWalletModalOpen(true)}>
-              Connect Wallet
-            </Button>
-            <Button fullWidth variant="secondary">
-              Learn how it works
+          <div className="mt-5 space-y-4">
+            {authMode === "login" ? (
+              <Field label="Username or Address">
+                <input
+                  value={identifier}
+                  onChange={(event) => setIdentifier(event.target.value)}
+                  className="h-12 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white px-3 text-sm outline-none"
+                  placeholder="jane_user or 0x..."
+                />
+              </Field>
+            ) : (
+              <Field label="Username">
+                <input
+                  value={username}
+                  onChange={(event) => setUsername(event.target.value)}
+                  className="h-12 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white px-3 text-sm outline-none"
+                  placeholder="Choose a username"
+                />
+              </Field>
+            )}
+
+            <Field label="Password" hint="Credentials are stored in localStorage after success.">
+              <input
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                className="h-12 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white px-3 text-sm outline-none"
+                placeholder="Enter password"
+              />
+            </Field>
+
+            {authError ? (
+              <p className="rounded-[var(--radius-md)] border border-[var(--color-error-100)] bg-[var(--color-error-100)] px-3 py-2 text-sm text-[var(--color-error-700)]">
+                {authError}
+              </p>
+            ) : null}
+
+            <Button
+              fullWidth
+              disabled={authLoading}
+              onClick={() => (authMode === "login" ? handleLogin() : handleSignup())}
+            >
+              {authLoading
+                ? "Processing..."
+                : authMode === "login"
+                  ? "Login with Toronet"
+                  : "Create Toronet Account"}
             </Button>
           </div>
         </section>
-
-        <Modal
-          isOpen={walletModalOpen}
-          title="Connect Wallet"
-          subtitle="Connect a wallet to view your vault, invest, and withdraw returns."
-          onClose={() => setWalletModalOpen(false)}
-          footer={
-            <>
-              <Button variant="ghost" fullWidth onClick={() => setWalletModalOpen(false)}>
-                Cancel
-              </Button>
-              <Button
-                fullWidth
-                onClick={connectWallet}
-                disabled={walletStatus === "connecting"}
-              >
-                {walletStatus === "connecting" ? "Connecting..." : "Connect"}
-              </Button>
-            </>
-          }
-        >
-          <div className="space-y-4 text-sm text-[var(--color-text-secondary)]">
-            <p>We will never access your funds without your approval.</p>
-            <Card soft>
-              <p className="font-semibold text-[var(--color-text-primary)]">Supported token</p>
-              <p className="mt-1">USDC balance will load after connection.</p>
-            </Card>
-          </div>
-        </Modal>
       </main>
     );
   }
@@ -325,897 +562,263 @@ export default function Home() {
             <p className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-tertiary)]">
               BizMarket Vault
             </p>
-            <h1 className="text-2xl font-bold tracking-tight">Your Vault Portfolio</h1>
+            <h1 className="text-2xl font-bold tracking-tight">LoanVault Dashboard</h1>
           </div>
-          <div className="flex items-center gap-2">
-            <div className="hidden rounded-[var(--radius-md)] border border-[var(--color-border)] px-3 py-2 text-sm font-medium text-[var(--color-text-secondary)] sm:block">
-              {shortAddress(data.profile.walletAddress)}
-            </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge tone="info">{network}</Badge>
+            <span className="hidden rounded-[var(--radius-md)] border border-[var(--color-border)] px-3 py-2 text-sm font-medium text-[var(--color-text-secondary)] sm:block">
+              {shortAddress(session.address)}
+            </span>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                void refreshPortfolio(session);
+              }}
+              disabled={portfolioLoading}
+            >
+              <RefreshCcw size={16} />
+            </Button>
+            <Link
+              href="/admin"
+              className="inline-flex h-12 items-center rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-4 text-sm font-semibold text-[var(--color-text-primary)]"
+            >
+              Admin
+            </Link>
+            <Link
+              href="/mint"
+              className="inline-flex h-12 items-center rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-4 text-sm font-semibold text-[var(--color-text-primary)]"
+            >
+              Mint
+            </Link>
+            <Button variant="ghost" onClick={logout}>
+              <LogOut size={16} />
+            </Button>
           </div>
         </header>
 
-        <UserView
-          tab={userTab}
-          setTab={setUserTab}
-          data={data}
-          openInvest={openInvest}
-          openWithdraw={() => {
-            setWithdrawStep("review");
-            setWithdrawModalOpen(true);
-          }}
-          openDetails={setSelectedInvestmentId}
-          activeInvestments={activeInvestments}
-          readyInvestments={readyInvestments}
-          withdrawnInvestments={withdrawnInvestments}
-          statusBanner={statusBanner}
+        <Segmented
+          value={tab}
+          onChange={setTab}
+          options={[
+            { value: "home", label: "Home" },
+            { value: "positions", label: "Positions" },
+            { value: "activity", label: "Activity" },
+            { value: "profile", label: "Profile" },
+          ]}
         />
-        {showLegacyAdminPanel ? (
-          <AdminView
-            tab={adminTab}
-            setTab={setAdminTab}
-            data={data}
-            openFundVault={() => {
-              setFundingStep("review");
-              setFundingModalOpen(true);
-            }}
-          />
+
+        {actionError ? (
+          <p className="mt-4 rounded-[var(--radius-md)] border border-[var(--color-error-100)] bg-[var(--color-error-100)] px-3 py-2 text-sm text-[var(--color-error-700)]">
+            {actionError}
+          </p>
         ) : null}
-      </div>
 
-      <Modal
-        isOpen={Boolean(selectedInvestment)}
-        title="Investment Detail"
-        subtitle={selectedInvestment ? selectedInvestment.id : undefined}
-        onClose={() => setSelectedInvestmentId(null)}
-        footer={
-          <>
-            <Button variant="ghost" fullWidth onClick={() => setSelectedInvestmentId(null)}>
-              Close
-            </Button>
-            <Button
-              fullWidth
-              onClick={() => {
-                setSelectedInvestmentId(null);
-                setInvestModalOpen(true);
-                setInvestStep("amount");
-              }}
-            >
-              Invest Again
-            </Button>
-          </>
-        }
-      >
-        {selectedInvestment ? (
-          <div className="space-y-4 text-sm text-[var(--color-text-secondary)]">
-            <StatusBadge status={selectedInvestment.status} />
-            <DetailRow label="Investment amount" value={formatMoney(selectedInvestment.principal)} />
-            <DetailRow label="Projected payout" value={formatMoney(selectedInvestment.projectedPayout)} />
-            <DetailRow label="Started on" value={formatDate(selectedInvestment.startedAt)} />
-            <DetailRow label="Matures on" value={formatDate(selectedInvestment.maturesAt)} />
-            <DetailRow
-              label="Countdown"
-              value={`${daysUntil(selectedInvestment.maturesAt, data.nowIso)} days`}
-            />
-            <p className="rounded-[var(--radius-md)] border border-[var(--color-info-100)] bg-[var(--color-info-100)] px-3 py-2 text-[var(--color-info-700)]">
-              {statusExplanation(selectedInvestment.status)}
-            </p>
-            <a className="text-[var(--color-primary-500)] underline" href="#">
-              View transaction: {selectedInvestment.txHash}
-            </a>
-          </div>
-        ) : null}
-      </Modal>
-
-      <Modal
-        isOpen={investModalOpen}
-        title={investTitles[investStep].title}
-        subtitle={investTitles[investStep].subtitle}
-        onClose={() => setInvestModalOpen(false)}
-        footer={
-          <>
-            <Button
-              variant="ghost"
-              fullWidth
-              onClick={() => {
-                if (investStep === "amount") {
-                  setInvestModalOpen(false);
-                  return;
-                }
-
-                if (investStep === "success") {
-                  setInvestModalOpen(false);
-                  setUserTab("investments");
-                  return;
-                }
-
-                const previousStep: Record<Exclude<InvestStep, "amount">, InvestStep> = {
-                  review: "amount",
-                  approve: "review",
-                  confirm: needsApproval ? "approve" : "review",
-                  success: "confirm",
-                };
-
-                setInvestStep(previousStep[investStep as Exclude<InvestStep, "amount">]);
-              }}
-            >
-              {investStep === "amount" ? "Cancel" : investStep === "success" ? "Go to Home" : "Back"}
-            </Button>
-            <Button
-              fullWidth
-              onClick={() => {
-                if (investStep === "amount") {
-                  setInvestStep("review");
-                  return;
-                }
-
-                if (investStep === "review") {
-                  setInvestStep(needsApproval ? "approve" : "confirm");
-                  return;
-                }
-
-                if (investStep === "approve") {
-                  setNeedsApproval(false);
-                  setInvestStep("confirm");
-                  return;
-                }
-
-                if (investStep === "confirm") {
-                  submitInvestment();
-                  return;
-                }
-
-                setInvestModalOpen(false);
-                setUserTab("investments");
-              }}
-              disabled={(investStep === "amount" && !isInvestAmountValid) || investStep === "success"}
-            >
-              {investStep === "amount" && "Continue"}
-              {investStep === "review" && "Approve & Continue"}
-              {investStep === "approve" && "Approve in Wallet"}
-              {investStep === "confirm" && "Confirm in Wallet"}
-              {investStep === "success" && "Done"}
-            </Button>
-          </>
-        }
-      >
-        {investStep === "amount" ? (
-          <div className="space-y-4">
-            <Field
-              label="Investment Amount"
-              hint={`Available balance: ${formatMoney(data.profile.stablecoinBalance)}`}
-              error={
-                investAmount.length > 0 && !isInvestAmountValid
-                  ? "Enter a valid amount above the minimum and within your balance"
-                  : undefined
-              }
-            >
-              <div className="flex items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
-                <input
-                  value={investAmount}
-                  onChange={(event) => setInvestAmount(event.target.value)}
-                  className="w-full bg-transparent text-2xl font-semibold outline-none"
-                  inputMode="decimal"
+        <div className="mt-4 grid gap-4">
+          {tab === "home" ? (
+            <>
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+                <MetricCard
+                  label="Wallet Balance"
+                  value={formatToken(portfolio.stablecoinBalance)}
+                  note={portfolioLoading ? "Refreshing..." : undefined}
                 />
-                <span className="text-sm font-semibold text-[var(--color-text-secondary)]">USDC</span>
+                <MetricCard label="Available Payout" value={formatToken(portfolio.availablePayout)} />
+                <MetricCard label="Total Invested" value={formatToken(portfolio.totalInvested)} />
+                <MetricCard label="Projected Payout" value={formatToken(portfolio.projectedPayout)} />
               </div>
-            </Field>
-            <div className="grid grid-cols-4 gap-2">
-              {[0.25, 0.5, 0.75, 1].map((ratio) => (
-                <Button
-                  key={ratio}
-                  variant="secondary"
-                  onClick={() => setInvestAmount((data.profile.stablecoinBalance * ratio).toFixed(2))}
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <Card title="Buy In" subtitle="Approve stablecoin and call buyIn">
+                  <div className="space-y-3">
+                    <Field label="Amount">
+                      <input
+                        value={investAmount}
+                        onChange={(event) => setInvestAmount(event.target.value)}
+                        className="h-12 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white px-3 text-sm outline-none"
+                        inputMode="decimal"
+                        placeholder="100"
+                      />
+                    </Field>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <Button
+                        disabled={activeAction !== null || !investAmount}
+                        onClick={() => {
+                          void runAction("Approve", approveAmount);
+                        }}
+                      >
+                        <ShieldCheck size={16} />
+                        {activeAction === "Approve" ? "Approving..." : "Approve"}
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        disabled={activeAction !== null || !investAmount}
+                        onClick={() => {
+                          void runAction("buyIn", buyIn);
+                        }}
+                      >
+                        <Coins size={16} />
+                        {activeAction === "buyIn" ? "Submitting..." : "buyIn"}
+                      </Button>
+                    </div>
+                  </div>
+                </Card>
+
+                <Card title="Claim Payout" subtitle="Call claimPayout to receive matured returns">
+                  <div className="space-y-3 text-sm text-[var(--color-text-secondary)]">
+                    <p>
+                      Claimable now: <strong>{formatToken(portfolio.availablePayout)}</strong>
+                    </p>
+                    <Button
+                      disabled={
+                        activeAction !== null ||
+                        portfolio.availablePayout <= BigInt(0)
+                      }
+                      onClick={() => {
+                        void runAction("claimPayout", claimPayout);
+                      }}
+                    >
+                      <HandCoins size={16} />
+                      {activeAction === "claimPayout" ? "Claiming..." : "claimPayout"}
+                    </Button>
+                  </div>
+                </Card>
+              </div>
+            </>
+          ) : null}
+
+          {tab === "positions" ? (
+            <Card title="Positions" subtitle="Direct output from getPositions">
+              <div className="space-y-3">
+                {portfolio.positions.length === 0 ? (
+                  <p className="text-sm text-[var(--color-text-secondary)]">No positions found.</p>
+                ) : (
+                  portfolio.positions.map((position) => (
+                    <article
+                      key={position.id}
+                      className="rounded-[var(--radius-md)] border border-[var(--color-border)] p-3"
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-sm font-semibold text-[var(--color-text-primary)]">
+                          {position.id}
+                        </p>
+                        {position.status === "ready" ? (
+                          <Badge tone="success">Ready</Badge>
+                        ) : (
+                          <Badge tone="neutral">Locked</Badge>
+                        )}
+                      </div>
+                      <div className="mt-2 grid gap-2 text-sm text-[var(--color-text-secondary)] sm:grid-cols-2">
+                        <span>Principal: {formatToken(position.principal)}</span>
+                        <span>Payout: {formatToken(position.payoutAmount)}</span>
+                        <span>
+                          Started: {formatDate(new Date(Number(position.startTime) * 1000).toISOString())}
+                        </span>
+                        <span>
+                          Matures: {formatDate(new Date(Number(position.maturityTime) * 1000).toISOString())}
+                        </span>
+                      </div>
+                    </article>
+                  ))
+                )}
+              </div>
+            </Card>
+          ) : null}
+
+          {tab === "activity" ? (
+            <Card title="Activity" subtitle="Recent actions submitted from this session">
+              <div className="space-y-3">
+                {activity.length === 0 ? (
+                  <p className="text-sm text-[var(--color-text-secondary)]">
+                    No actions yet. Start with approve, buyIn, or claimPayout.
+                  </p>
+                ) : (
+                  activity.map((item) => (
+                    <div
+                      key={item.id}
+                      className="rounded-[var(--radius-md)] border border-[var(--color-border)] p-3"
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-sm font-semibold text-[var(--color-text-primary)]">{item.title}</p>
+                        <Badge
+                          tone={
+                            item.status === "completed"
+                              ? "success"
+                              : item.status === "failed"
+                                ? "warning"
+                                : "info"
+                          }
+                        >
+                          {item.status}
+                        </Badge>
+                      </div>
+                      <p className="mt-1 text-sm text-[var(--color-text-secondary)]">{item.detail}</p>
+                      <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">
+                        {formatDate(item.when)}
+                      </p>
+                      {item.txHash ? (
+                        <p className="mt-1 break-all text-xs text-[var(--color-text-tertiary)]">
+                          Tx: {item.txHash}
+                        </p>
+                      ) : null}
+                    </div>
+                  ))
+                )}
+              </div>
+            </Card>
+          ) : null}
+
+          {tab === "profile" ? (
+            <Card title="Profile" subtitle="Current session and contract endpoints">
+              <div className="space-y-3 text-sm text-[var(--color-text-secondary)]">
+                <p>
+                  <strong>Address:</strong> {session.address}
+                </p>
+                <p>
+                  <strong>Identifier:</strong> {session.identifier}
+                </p>
+                <p>
+                  <strong>Network:</strong> {network}
+                </p>
+                <p>
+                  <strong>LoanVault:</strong> {vaultAddress}
+                </p>
+                <p>
+                  <strong>Stablecoin:</strong> {stablecoinAddress}
+                </p>
+                <p>
+                  <strong>Session saved:</strong> {formatDate(session.loggedInAt)}
+                </p>
+              </div>
+            </Card>
+          ) : null}
+        </div>
+
+        <nav className="fixed bottom-3 left-3 right-3 z-30 rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-white/95 p-2 shadow-[0_14px_28px_rgb(15_23_40_/_12%)] backdrop-blur lg:hidden">
+          <ul className="grid grid-cols-4 gap-1">
+            {[
+              { value: "home", label: "Home", icon: <Landmark size={16} /> },
+              { value: "positions", label: "Positions", icon: <Coins size={16} /> },
+              { value: "activity", label: "Activity", icon: <Activity size={16} /> },
+              { value: "profile", label: "Profile", icon: <UserCircle2 size={16} /> },
+            ].map((option) => (
+              <li key={option.value}>
+                <button
+                  type="button"
+                  onClick={() => setTab(option.value as UserTab)}
+                  className={`flex w-full flex-col items-center gap-1 rounded-[12px] px-1 py-2 text-[11px] font-semibold ${
+                    tab === option.value
+                      ? "bg-[var(--color-primary-100)] text-[var(--color-primary-700)]"
+                      : "text-[var(--color-text-secondary)]"
+                  }`}
                 >
-                  {ratio === 1 ? "MAX" : `${ratio * 100}%`}
-                </Button>
-              ))}
-            </div>
-            <Card soft>
-              <p className="text-sm text-[var(--color-text-secondary)]">Projected payout preview</p>
-              <p className="mt-1 text-2xl font-bold">{formatMoney(investProjected)}</p>
-              <p className="mt-2 text-sm text-[var(--color-text-secondary)]">
-                Your funds will be locked for {data.admin.protocolParameters.lockWeeks} weeks.
-              </p>
-            </Card>
-          </div>
-        ) : null}
-
-        {investStep === "review" ? (
-          <div className="space-y-3">
-            <DetailRow label="Amount" value={formatMoney(investNumeric)} />
-            <DetailRow label="Entry Fee" value={formatMoney(investFee)} />
-            <DetailRow label="Net Investment" value={formatMoney(investNet)} />
-            <DetailRow label="Projected Payout" value={formatMoney(investProjected)} />
-            <DetailRow
-              label="Maturity Date"
-              value={formatDate(
-                new Date(
-                  new Date(data.nowIso).getTime() +
-                    data.admin.protocolParameters.lockWeeks * 7 * 24 * 60 * 60 * 1000,
-                ).toISOString(),
-              )}
-            />
-            <p className="rounded-[var(--radius-md)] border border-[var(--color-warning-100)] bg-[var(--color-warning-100)] px-3 py-2 text-sm text-[var(--color-warning-700)]">
-              Withdrawals are only available after maturity and when vault liquidity is available.
-            </p>
-          </div>
-        ) : null}
-
-        {investStep === "approve" ? (
-          <Card soft>
-            <p className="text-sm text-[var(--color-text-secondary)]">
-              Before investing, you need to approve token access once. You stay in control and
-              can review this permission in your wallet.
-            </p>
-            <div className="mt-4 flex items-center gap-2 text-sm font-semibold text-[var(--color-primary-700)]">
-              <ShieldCheck size={16} />
-              Secure wallet confirmation required
-            </div>
-          </Card>
-        ) : null}
-
-        {investStep === "confirm" ? (
-          <Card>
-            <p className="text-sm text-[var(--color-text-secondary)]">
-              Confirm your investment to create a new locked investment.
-            </p>
-            <ul className="mt-4 space-y-2 text-sm text-[var(--color-text-secondary)]">
-              <li>1. Awaiting signature in wallet</li>
-              <li>2. Transaction pending confirmation</li>
-              <li>3. Investment becomes visible in portfolio</li>
-            </ul>
-          </Card>
-        ) : null}
-
-        {investStep === "success" ? (
-          <div className="space-y-4 text-center">
-            <div className="mx-auto inline-flex rounded-full bg-[var(--color-success-100)] p-3 text-[var(--color-success-700)]">
-              <CheckCircle2 size={22} />
-            </div>
-            <p className="text-xl font-bold">Investment confirmed</p>
-            <p className="text-sm text-[var(--color-text-secondary)]">
-              Your funds are now locked until maturity. We added this investment to your
-              portfolio immediately.
-            </p>
-            <div className="grid gap-2 text-left text-sm">
-              <DetailRow label="Invested" value={formatMoney(investNumeric)} />
-              <DetailRow label="Projected payout" value={formatMoney(investProjected)} />
-            </div>
-          </div>
-        ) : null}
-      </Modal>
-
-      <Modal
-        isOpen={withdrawModalOpen}
-        title="Withdraw Returns"
-        subtitle="Withdraw returns from all eligible matured investments"
-        onClose={() => setWithdrawModalOpen(false)}
-        footer={
-          <>
-            <Button variant="ghost" fullWidth onClick={() => setWithdrawModalOpen(false)}>
-              Back
-            </Button>
-            <Button
-              fullWidth
-              disabled={readyInvestments.length === 0 || withdrawStep === "success"}
-              onClick={() => {
-                if (withdrawStep === "review") {
-                  setWithdrawStep("confirm");
-                  return;
-                }
-
-                if (withdrawStep === "confirm") {
-                  submitWithdraw();
-                }
-              }}
-            >
-              {withdrawStep === "review" ? "Withdraw Now" : withdrawStep === "confirm" ? "Confirm in Wallet" : "Done"}
-            </Button>
-          </>
-        }
-      >
-        {withdrawStep === "review" ? (
-          <div className="space-y-4 text-sm text-[var(--color-text-secondary)]">
-            <Card soft>
-              <p>Total available now</p>
-              <p className="mt-2 text-2xl font-bold text-[var(--color-text-primary)]">
-                {formatMoney(totalReadyAmount)}
-              </p>
-            </Card>
-            <p>
-              You can withdraw returns from all eligible matured investments in one transaction.
-            </p>
-            {readyInvestments.length > 0 ? (
-              <ul className="space-y-2">
-                {readyInvestments.map((investment) => (
-                  <li
-                    key={investment.id}
-                    className="rounded-[var(--radius-md)] border border-[var(--color-border)] px-3 py-2"
-                  >
-                    {investment.id} - {formatMoney(investment.projectedPayout)}
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="rounded-[var(--radius-md)] border border-[var(--color-warning-100)] bg-[var(--color-warning-100)] px-3 py-2 text-[var(--color-warning-700)]">
-                No returns are available to withdraw right now.
-              </p>
-            )}
-          </div>
-        ) : null}
-
-        {withdrawStep === "confirm" ? (
-          <Card>
-            <p className="text-sm text-[var(--color-text-secondary)]">
-              Destination wallet: {shortAddress(data.profile.walletAddress)}
-            </p>
-            <p className="mt-2 text-sm text-[var(--color-text-secondary)]">
-              Not all matured investments may be available if the vault is not fully funded.
-            </p>
-          </Card>
-        ) : null}
-
-        {withdrawStep === "success" ? (
-          <div className="space-y-3 text-center">
-            <div className="mx-auto inline-flex rounded-full bg-[var(--color-success-100)] p-3 text-[var(--color-success-700)]">
-              <CheckCircle2 size={22} />
-            </div>
-            <p className="text-xl font-bold">Withdrawal successful</p>
-            <p className="text-sm text-[var(--color-text-secondary)]">
-              Your returns were sent to {shortAddress(data.profile.walletAddress)}.
-            </p>
-          </div>
-        ) : null}
-      </Modal>
-
-      <Modal
-        isOpen={fundingModalOpen}
-        title="Fund Vault"
-        subtitle="Cover shortfall so matured withdrawals become available"
-        onClose={() => setFundingModalOpen(false)}
-        footer={
-          <>
-            <Button variant="ghost" fullWidth onClick={() => setFundingModalOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              fullWidth
-              disabled={data.vault.shortfall <= 0 || fundingStep === "success"}
-              onClick={() => {
-                if (fundingStep === "review") {
-                  setFundingStep("approve");
-                  return;
-                }
-
-                if (fundingStep === "approve") {
-                  setFundingStep("confirm");
-                  return;
-                }
-
-                if (fundingStep === "confirm") {
-                  submitFundVault();
-                }
-              }}
-            >
-              {fundingStep === "review"
-                ? "Continue"
-                : fundingStep === "approve"
-                  ? "Approve in Wallet"
-                  : fundingStep === "confirm"
-                    ? "Confirm Funding"
-                    : "Done"}
-            </Button>
-          </>
-        }
-      >
-        {fundingStep === "review" ? (
-          <div className="space-y-3">
-            <DetailRow label="Outstanding payout obligations" value={formatMoney(data.vault.outstandingPayoutObligations)} />
-            <DetailRow label="Vault balance" value={formatMoney(data.vault.vaultBalance)} />
-            <DetailRow label="Shortfall" value={formatMoney(data.vault.shortfall)} />
-          </div>
-        ) : null}
-
-        {fundingStep === "approve" ? (
-          <Card soft>
-            <p className="text-sm text-[var(--color-text-secondary)]">
-              Approve stablecoin access so operations can fund the vault and unlock pending
-              withdrawals.
-            </p>
-          </Card>
-        ) : null}
-
-        {fundingStep === "confirm" ? (
-          <Card>
-            <p className="text-sm text-[var(--color-text-secondary)]">
-              Confirm transfer of {formatMoney(data.vault.shortfall)} from funding wallet.
-            </p>
-          </Card>
-        ) : null}
-
-        {fundingStep === "success" ? (
-          <div className="space-y-3 text-center">
-            <div className="mx-auto inline-flex rounded-full bg-[var(--color-success-100)] p-3 text-[var(--color-success-700)]">
-              <CheckCircle2 size={22} />
-            </div>
-            <p className="text-xl font-bold">Vault funding completed</p>
-            <p className="text-sm text-[var(--color-text-secondary)]">
-              Shortfall reduced to zero and user withdrawals can proceed.
-            </p>
-          </div>
-        ) : null}
-      </Modal>
+                  {option.icon}
+                  <span>{option.label}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </nav>
+      </div>
     </main>
   );
 }
-
-function UserView({
-  tab,
-  setTab,
-  data,
-  openInvest,
-  openWithdraw,
-  openDetails,
-  activeInvestments,
-  readyInvestments,
-  withdrawnInvestments,
-  statusBanner,
-}: {
-  tab: UserTab;
-  setTab: (value: UserTab) => void;
-  data: MockScenario;
-  openInvest: () => void;
-  openWithdraw: () => void;
-  openDetails: (id: string) => void;
-  activeInvestments: Array<Investment & { status: InvestmentStatus; projectedPayout: number }>;
-  readyInvestments: Array<Investment & { status: InvestmentStatus; projectedPayout: number }>;
-  withdrawnInvestments: Array<Investment & { status: InvestmentStatus; projectedPayout: number }>;
-  statusBanner: { tone: "success" | "warning"; title: string; body: string };
-}) {
-  const [listFilter, setListFilter] = useState<"active" | "ready" | "withdrawn">("active");
-
-  const listData =
-    listFilter === "active"
-      ? activeInvestments
-      : listFilter === "ready"
-        ? readyInvestments
-        : withdrawnInvestments;
-
-  return (
-    <div className="grid gap-4">
-      {tab === "home" ? (
-        <>
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-            <MetricCard
-              label="Available to Withdraw"
-              value={formatMoney(data.vault.availableToWithdraw)}
-              tone={statusBanner.tone === "success" ? "success" : "warning"}
-            />
-            <MetricCard label="Total Invested" value={formatMoney(data.vault.totalInvested)} />
-            <MetricCard label="Projected Payout" value={formatMoney(data.vault.projectedPayout)} />
-            <MetricCard
-              label="Next Maturity"
-              value={formatDate(data.vault.nextMaturityAt)}
-              note={`${daysUntil(data.vault.nextMaturityAt, data.nowIso)} days`}
-            />
-          </div>
-
-          <Card
-            className={
-              statusBanner.tone === "success"
-                ? "border-[var(--color-success-100)] bg-[var(--color-success-100)]"
-                : "border-[var(--color-warning-100)] bg-[var(--color-warning-100)]"
-            }
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-sm font-semibold">{statusBanner.title}</p>
-                <p className="mt-1 text-sm text-[var(--color-text-secondary)]">{statusBanner.body}</p>
-              </div>
-              <ShieldCheck className="shrink-0" size={18} />
-            </div>
-          </Card>
-
-          <div className="grid gap-3 sm:grid-cols-3">
-            <Button onClick={openInvest}>Invest</Button>
-            <Button variant="secondary" onClick={openWithdraw}>
-              Withdraw Returns
-            </Button>
-            <Button variant="ghost" onClick={() => setTab("investments")}>
-              View Investments
-            </Button>
-          </div>
-
-          <Card title="Active Investments" subtitle="Your latest locked or pending positions">
-            {activeInvestments.length > 0 ? (
-              <div className="space-y-3">
-                {activeInvestments.slice(0, 3).map((investment) => (
-                  <InvestmentRow key={investment.id} investment={investment} onOpen={openDetails} />
-                ))}
-              </div>
-            ) : (
-              <p className="text-sm text-[var(--color-text-secondary)]">
-                You haven&apos;t created any investments yet.
-              </p>
-            )}
-          </Card>
-        </>
-      ) : null}
-
-      {tab === "investments" ? (
-        <>
-          <Card title="My Investments" subtitle="Track active, ready, and withdrawn positions">
-            <Segmented
-              value={listFilter}
-              onChange={setListFilter}
-              options={[
-                { value: "active", label: "Active" },
-                { value: "ready", label: "Ready" },
-                { value: "withdrawn", label: "Withdrawn" },
-              ]}
-            />
-            <div className="mt-4 space-y-3">
-              {listData.length > 0 ? (
-                listData.map((investment) => (
-                  <InvestmentRow key={investment.id} investment={investment} onOpen={openDetails} />
-                ))
-              ) : (
-                <p className="rounded-[var(--radius-md)] border border-[var(--color-border)] p-4 text-sm text-[var(--color-text-secondary)]">
-                  {listFilter === "active" && "No active investments right now."}
-                  {listFilter === "ready" && "No returns are available to withdraw right now."}
-                  {listFilter === "withdrawn" && "No withdrawn investments yet."}
-                </p>
-              )}
-            </div>
-          </Card>
-          <Button onClick={openInvest}>Invest</Button>
-        </>
-      ) : null}
-
-      {tab === "withdraw" ? (
-        <Card title="Withdraw Returns" subtitle="Withdraw returns from all eligible matured investments">
-          <div className="space-y-3 text-sm text-[var(--color-text-secondary)]">
-            <p>Total available now</p>
-            <p className="text-3xl font-bold text-[var(--color-text-primary)]">
-              {formatMoney(readyInvestments.reduce((sum, item) => sum + item.projectedPayout, 0))}
-            </p>
-            <p>
-              Not all matured investments may be available if the vault is not fully funded.
-            </p>
-            <Button onClick={openWithdraw} disabled={readyInvestments.length === 0}>
-              Withdraw Now
-            </Button>
-          </div>
-        </Card>
-      ) : null}
-
-      {tab === "activity" ? (
-        <Card title="Activity" subtitle="Transaction timeline and auditability">
-          <ActivityList items={data.userActivity} />
-        </Card>
-      ) : null}
-
-      {tab === "profile" ? (
-        <Card title="Profile, Help, and Legal" subtitle="Support and disclosures">
-          <div className="space-y-4">
-            <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] p-4 text-sm">
-              <p className="font-semibold text-[var(--color-text-primary)]">Wallet</p>
-              <p className="mt-1 text-[var(--color-text-secondary)]">
-                {shortAddress(data.profile.walletAddress)}
-              </p>
-            </div>
-            <FaqRow title="How vault withdrawals work" />
-            <FaqRow title="Understanding lock periods" />
-            <FaqRow title="Why a matured investment may still be pending" />
-            <FaqRow title="Contact support" />
-          </div>
-        </Card>
-      ) : null}
-
-      <MobileNav
-        options={[
-          { value: "home", label: "Home", icon: <Landmark size={16} /> },
-          { value: "investments", label: "Investments", icon: <Coins size={16} /> },
-          { value: "withdraw", label: "Withdraw", icon: <HandCoins size={16} /> },
-          { value: "activity", label: "Activity", icon: <Activity size={16} /> },
-          { value: "profile", label: "Profile", icon: <UserCircle2 size={16} /> },
-        ]}
-        value={tab}
-        onChange={setTab}
-      />
-    </div>
-  );
-}
-
-function AdminView({
-  tab,
-  setTab,
-  data,
-  openFundVault,
-}: {
-  tab: AdminTab;
-  setTab: (value: AdminTab) => void;
-  data: MockScenario;
-  openFundVault: () => void;
-}) {
-  return (
-    <div className="grid gap-4">
-      {tab === "overview" ? (
-        <>
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-            <MetricCard
-              label="Outstanding Payout Obligations"
-              value={formatMoney(data.vault.outstandingPayoutObligations)}
-            />
-            <MetricCard label="Vault Balance" value={formatMoney(data.vault.vaultBalance)} />
-            <MetricCard
-              label="Shortfall"
-              value={formatMoney(data.vault.shortfall)}
-              tone={data.vault.shortfall > 0 ? "warning" : "success"}
-            />
-            <MetricCard
-              label="Funding Wallet"
-              value={formatMoney(data.admin.fundingWalletBalance)}
-            />
-          </div>
-          <Card>
-            <Button onClick={openFundVault} disabled={data.vault.shortfall <= 0}>
-              Fund Vault
-            </Button>
-          </Card>
-        </>
-      ) : null}
-
-      {tab === "funding" ? (
-        <Card title="Vault Funding" subtitle="Monitor liabilities and liquidity">
-          <div className="space-y-3">
-            <DetailRow label="Outstanding payout obligations" value={formatMoney(data.vault.outstandingPayoutObligations)} />
-            <DetailRow label="Vault balance" value={formatMoney(data.vault.vaultBalance)} />
-            <DetailRow label="Shortfall" value={formatMoney(data.vault.shortfall)} />
-            <Button onClick={openFundVault} disabled={data.vault.shortfall <= 0}>
-              Fund Vault
-            </Button>
-          </div>
-        </Card>
-      ) : null}
-
-      {tab === "parameters" ? (
-        <Card title="Protocol Parameters" subtitle="Plain language settings">
-          <div className="space-y-3">
-            <DetailRow
-              label="Entry Fee"
-              value={`${(data.admin.protocolParameters.entryFeeRate * 100).toFixed(2)}%`}
-            />
-            <DetailRow
-              label="Projected Return Rate"
-              value={`${(data.admin.protocolParameters.projectedReturnRate * 100).toFixed(2)}%`}
-            />
-            <DetailRow
-              label="Lock Period"
-              value={`${data.admin.protocolParameters.lockWeeks} weeks`}
-            />
-            <DetailRow
-              label="Minimum Investment"
-              value={formatMoney(data.admin.protocolParameters.minimumInvestment)}
-            />
-          </div>
-        </Card>
-      ) : null}
-
-      {tab === "transfers" ? (
-        <Card title="Transfers" subtitle="Operational transfer records">
-          <div className="space-y-3">
-            {data.admin.transfers.map((transfer) => (
-              <div
-                key={transfer.id}
-                className="rounded-[var(--radius-md)] border border-[var(--color-border)] p-3 text-sm"
-              >
-                <p className="font-semibold text-[var(--color-text-primary)]">
-                  {transfer.from} <ArrowRight className="inline" size={14} /> {transfer.to}
-                </p>
-                <p className="mt-1 text-[var(--color-text-secondary)]">
-                  {formatMoney(transfer.amount)} - {formatDate(transfer.date)}
-                </p>
-                <span className="mt-2 inline-flex rounded-full bg-[var(--color-surface-alt)] px-2 py-1 text-xs font-semibold text-[var(--color-text-secondary)]">
-                  {transfer.status}
-                </span>
-              </div>
-            ))}
-          </div>
-        </Card>
-      ) : null}
-
-      {tab === "activity" ? (
-        <Card title="Admin Activity" subtitle="Auditable operations timeline">
-          <ActivityList items={data.admin.activity} />
-        </Card>
-      ) : null}
-
-      <MobileNav
-        options={[
-          { value: "overview", label: "Overview", icon: <Landmark size={16} /> },
-          { value: "funding", label: "Funding", icon: <Wallet size={16} /> },
-          { value: "parameters", label: "Parameters", icon: <CircleDollarSign size={16} /> },
-          { value: "transfers", label: "Transfers", icon: <RefreshCcw size={16} /> },
-          { value: "activity", label: "Activity", icon: <Activity size={16} /> },
-        ]}
-        value={tab}
-        onChange={setTab}
-      />
-    </div>
-  );
-}
-
-function InvestmentRow({
-  investment,
-  onOpen,
-}: {
-  investment: Investment & { status: InvestmentStatus; projectedPayout: number };
-  onOpen: (id: string) => void;
-}) {
-  return (
-    <article className="rounded-[var(--radius-md)] border border-[var(--color-border)] p-3">
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-sm font-semibold">{investment.id}</p>
-        <StatusBadge status={investment.status} />
-      </div>
-      <div className="mt-2 grid gap-2 text-sm text-[var(--color-text-secondary)] sm:grid-cols-2">
-        <span>Principal: {formatMoney(investment.principal)}</span>
-        <span>Projected payout: {formatMoney(investment.projectedPayout)}</span>
-        <span>Started: {formatDate(investment.startedAt)}</span>
-        <span>Matures: {formatDate(investment.maturesAt)}</span>
-      </div>
-      <button
-        className="mt-3 text-sm font-semibold text-[var(--color-primary-500)]"
-        type="button"
-        onClick={() => onOpen(investment.id)}
-      >
-        View Details
-      </button>
-    </article>
-  );
-}
-
-function statusExplanation(status: InvestmentStatus) {
-  if (status === "locked") {
-    return "This investment is currently locked.";
-  }
-
-  if (status === "ready") {
-    return "This investment is matured and ready to withdraw.";
-  }
-
-  if (status === "awaiting_funding") {
-    return "This investment has matured and is waiting for vault funding before withdrawal.";
-  }
-
-  if (status === "matured") {
-    return "This investment has matured.";
-  }
-
-  return "This investment has been withdrawn.";
-}
-
-function StatusBadge({ status }: { status: InvestmentStatus }) {
-  if (status === "ready") {
-    return <Badge tone="success">Ready to Withdraw</Badge>;
-  }
-
-  if (status === "awaiting_funding") {
-    return <Badge tone="warning">Awaiting Vault Funding</Badge>;
-  }
-
-  if (status === "matured") {
-    return <Badge tone="info">Matured</Badge>;
-  }
-
-  if (status === "locked") {
-    return <Badge tone="neutral">Locked</Badge>;
-  }
-
-  return <Badge tone="neutral">Withdrawn</Badge>;
-}
-
-function DetailRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm">
-      <span className="text-[var(--color-text-secondary)]">{label}</span>
-      <span className="font-semibold text-[var(--color-text-primary)]">{value}</span>
-    </div>
-  );
-}
-
-function ActivityList({ items }: { items: ActivityItem[] }) {
-  return (
-    <div className="space-y-3">
-      {items.map((item) => (
-        <div
-          key={item.id}
-          className="flex items-start justify-between gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] p-3"
-        >
-          <div>
-            <p className="text-sm font-semibold text-[var(--color-text-primary)]">{item.title}</p>
-            <p className="mt-1 text-sm text-[var(--color-text-secondary)]">{item.description}</p>
-            <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">{formatDate(item.date)}</p>
-          </div>
-          <div className="text-right text-sm">
-            {item.amount ? (
-              <p className="font-semibold text-[var(--color-text-primary)]">{formatMoney(item.amount)}</p>
-            ) : null}
-            <span className="mt-1 inline-flex rounded-full bg-[var(--color-surface-alt)] px-2 py-1 text-xs font-semibold text-[var(--color-text-secondary)]">
-              {item.status}
-            </span>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function FaqRow({ title }: { title: string }) {
-  return (
-    <button
-      className="flex w-full items-center justify-between rounded-[var(--radius-md)] border border-[var(--color-border)] px-4 py-3 text-left text-sm font-semibold text-[var(--color-text-primary)]"
-      type="button"
-    >
-      {title}
-      <ArrowRight size={16} />
-    </button>
-  );
-}
-
-function MobileNav<T extends string>({
-  options,
-  value,
-  onChange,
-}: {
-  options: Array<{ value: T; label: string; icon: React.ReactNode }>;
-  value: T;
-  onChange: (value: T) => void;
-}) {
-  return (
-    <nav className="fixed bottom-3 left-3 right-3 z-30 rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-white/95 p-2 shadow-[0_14px_28px_rgb(15_23_40_/_12%)] backdrop-blur lg:hidden">
-      <ul className="grid grid-cols-5 gap-1">
-        {options.map((option) => (
-          <li key={option.value}>
-            <button
-              type="button"
-              onClick={() => onChange(option.value)}
-              className={`flex w-full flex-col items-center gap-1 rounded-[12px] px-1 py-2 text-[11px] font-semibold ${
-                value === option.value
-                  ? "bg-[var(--color-primary-100)] text-[var(--color-primary-700)]"
-                  : "text-[var(--color-text-secondary)]"
-              }`}
-            >
-              {option.icon}
-              <span>{option.label}</span>
-            </button>
-          </li>
-        ))}
-      </ul>
-    </nav>
-  );
-}
-
-const investTitles: Record<InvestStep, { title: string; subtitle: string }> = {
-  amount: {
-    title: "Start Investment",
-    subtitle: "Choose how much stablecoin you want to lock",
-  },
-  review: {
-    title: "Review Investment",
-    subtitle: "Review your investment before continuing",
-  },
-  approve: {
-    title: "Approve Token Access",
-    subtitle: "Approve this token once so the vault can process your investment",
-  },
-  confirm: {
-    title: "Confirm Investment",
-    subtitle: "This will create a new locked investment",
-  },
-  success: {
-    title: "Investment Success",
-    subtitle: "Your vault position is now active",
-  },
-};
