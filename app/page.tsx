@@ -593,7 +593,27 @@ export default function Home() {
         buyInResponse,
       );
 
+      // Apply an immediate optimistic update so dashboard metrics react instantly.
+      setPortfolio((previous) => ({
+        ...previous,
+        stablecoinBalance:
+          previous.stablecoinBalance > buyInDraft.amountUnits
+            ? previous.stablecoinBalance - buyInDraft.amountUnits
+            : BigInt(0),
+        totalInvested: previous.totalInvested + buyInDraft.netPrincipal,
+        projectedPayout: previous.projectedPayout + buyInDraft.projectedPayout,
+      }));
+
       await refreshPortfolio(session);
+
+      // Chain state may lag briefly after submit, so re-sync metrics shortly after.
+      window.setTimeout(() => {
+        void refreshPortfolio(session);
+      }, 1500);
+      window.setTimeout(() => {
+        void refreshPortfolio(session);
+      }, 3500);
+
       setBuyInStep("success");
       setBuyInProgress("idle");
     } catch (error) {
