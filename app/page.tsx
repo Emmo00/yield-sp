@@ -5,6 +5,7 @@ import {
   ArrowRight,
   Check,
   CircleCheckBig,
+  CircleHelp,
   Copy,
   Coins,
   HandCoins,
@@ -46,10 +47,11 @@ import {
 import { formatUnits, toUnits } from "@/app/lib/units";
 
 type AuthMode = "login" | "signup";
-type UserTab = "home" | "positions" | "activity" | "profile";
+type UserTab = "home" | "positions" | "activity" | "profile" | "faq";
 type ActivityStatus = "completed" | "pending" | "failed";
 type BuyInFlowStep = "amount" | "review" | "processing" | "success";
 type BuyInProgress = "idle" | "approving" | "buying";
+type ClaimFlowStep = "review" | "processing" | "success";
 
 interface PositionRecord {
   id: string;
@@ -102,6 +104,39 @@ const INITIAL_PORTFOLIO: PortfolioState = {
   yieldBps: BigInt(0),
   positions: [],
 };
+
+const FAQ_ITEMS = [
+  {
+    question: "What credentials do I need to use the dashboard?",
+    answer:
+      "Use your Toronet username or wallet address plus password. Once authenticated, your session is stored locally in this browser so actions can run without re-entering credentials each time.",
+  },
+  {
+    question: "What happens during the Buy-In flow?",
+    answer:
+      "After you enter an amount and confirm once, the app executes approve first, then buyIn automatically. You will see progress and transaction hashes in the modal.",
+  },
+  {
+    question: "Why can my balances update a few seconds after submit?",
+    answer:
+      "Blockchain state can propagate with slight delay. The app updates metrics immediately, then runs follow-up refreshes so dashboard values reconcile with the latest on-chain state.",
+  },
+  {
+    question: "How are fee and projected payout calculated?",
+    answer:
+      "The app reads buyIn fee and yield percentages directly from LoanVault contract parameters. Your review step shows gross amount, fee amount, net principal, and projected payout before you confirm.",
+  },
+  {
+    question: "When can I claim payout?",
+    answer:
+      "You can claim when positions mature based on the lock period and when claimable amount is greater than zero. Use the Claim flow to submit claimPayout to your current wallet address.",
+  },
+  {
+    question: "How do I switch between testnet and mainnet?",
+    answer:
+      "Network mode is controlled by NEXT_PUBLIC_NETWORK_ENV. The badge at the top shows the active environment, and contract addresses/rpc settings follow that selection.",
+  },
+] as const;
 
 function parsePositions(value: unknown, lockPeriodSeconds: bigint): PositionRecord[] {
   const extracted = extractResultValue(value);
@@ -202,6 +237,7 @@ export default function Home() {
   const [buyInApproveTxHash, setBuyInApproveTxHash] = useState("");
   const [buyInTxHash, setBuyInTxHash] = useState("");
   const [claimModalOpen, setClaimModalOpen] = useState(false);
+  const [claimStep, setClaimStep] = useState<ClaimFlowStep>("review");
   const [claimFlowError, setClaimFlowError] = useState("");
   const [claimTxHash, setClaimTxHash] = useState("");
 
@@ -463,6 +499,7 @@ export default function Home() {
     setSession(null);
     setBuyInModalOpen(false);
     setClaimModalOpen(false);
+    setClaimStep("review");
     setClaimFlowError("");
     setClaimTxHash("");
     setDisplayUsername("");
@@ -628,6 +665,7 @@ export default function Home() {
   }
 
   function openClaimModal() {
+    setClaimStep("review");
     setClaimFlowError("");
     setClaimTxHash("");
     setClaimModalOpen(true);
@@ -639,6 +677,7 @@ export default function Home() {
     }
 
     setClaimModalOpen(false);
+    setClaimStep("review");
     setClaimFlowError("");
   }
 
@@ -649,6 +688,7 @@ export default function Home() {
 
     setActionError("");
     setClaimFlowError("");
+    setClaimStep("processing");
     setActiveAction("claimPayout");
 
     try {
@@ -667,9 +707,27 @@ export default function Home() {
         "completed",
         response,
       );
+
+      // Show immediate feedback while we synchronize exact values from chain.
+      setPortfolio((previous) => ({
+        ...previous,
+        availablePayout: BigInt(0),
+      }));
+
       await refreshPortfolio(session);
+
+      // Claim updates can settle with slight delay, so re-check shortly after.
+      window.setTimeout(() => {
+        void refreshPortfolio(session);
+      }, 1500);
+      window.setTimeout(() => {
+        void refreshPortfolio(session);
+      }, 3500);
+
+      setClaimStep("success");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Claim payout failed.";
+      setClaimStep("review");
       setClaimFlowError(message);
       setActionError(message);
       addActivity("claimPayout", message, "failed");
@@ -828,6 +886,7 @@ export default function Home() {
             { value: "positions", label: "Positions" },
             { value: "activity", label: "Activity" },
             { value: "profile", label: "Profile" },
+            { value: "faq", label: "FAQ" },
           ]}
         />
 
@@ -1007,6 +1066,27 @@ export default function Home() {
               </div>
             </Card>
           ) : null}
+
+          {tab === "faq" ? (
+            <Card title="FAQ" subtitle="Common questions about using BizMarket Vault">
+              <div className="space-y-3">
+                {FAQ_ITEMS.map((item) => (
+                  <details
+                    key={item.question}
+                    className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3"
+                  >
+                    <summary className="cursor-pointer list-none text-sm font-semibold text-[var(--color-text-primary)]">
+                      <span className="inline-flex items-center gap-2">
+                        <CircleHelp size={15} />
+                        {item.question}
+                      </span>
+                    </summary>
+                    <p className="mt-2 text-sm leading-6 text-[var(--color-text-secondary)]">{item.answer}</p>
+                  </details>
+                ))}
+              </div>
+            </Card>
+          ) : null}
         </div>
 
         <Modal
@@ -1162,13 +1242,24 @@ export default function Home() {
         <Modal
           isOpen={claimModalOpen}
           title="Claim Payout"
-          subtitle="Confirm payout destination and submit transaction"
+          subtitle={
+            claimStep === "review"
+              ? "Review and confirm claim submission"
+              : claimStep === "processing"
+                ? "Submitting claim transaction"
+                : "Claim submitted"
+          }
           onClose={closeClaimModal}
           footer={
-            claimTxHash ? (
+            claimStep === "success" ? (
               <Button fullWidth onClick={closeClaimModal}>
                 <CircleCheckBig size={16} />
                 Done
+              </Button>
+            ) : claimStep === "processing" ? (
+              <Button fullWidth disabled>
+                <LoaderCircle className="animate-spin" size={16} />
+                Processing...
               </Button>
             ) : (
               <>
@@ -1182,14 +1273,7 @@ export default function Home() {
                     void executeClaimPayout();
                   }}
                 >
-                  {activeAction === "claimPayout" ? (
-                    <>
-                      <LoaderCircle className="animate-spin" size={16} />
-                      Processing...
-                    </>
-                  ) : (
-                    "Confirm Claim"
-                  )}
+                  Confirm Claim
                 </Button>
               </>
             )
@@ -1204,6 +1288,24 @@ export default function Home() {
                 Receiver address: <strong>{shortAddress(session.address)}</strong>
               </p>
             </div>
+
+            {claimStep === "review" ? (
+              <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white p-3 text-[var(--color-text-secondary)]">
+                <p className="font-semibold text-[var(--color-text-primary)]">Confirmation</p>
+                <p className="mt-1">
+                  You are about to call <strong>claimPayout</strong> and send matured payout to your
+                  current wallet address.
+                </p>
+              </div>
+            ) : null}
+
+            {claimStep === "processing" ? (
+              <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-[var(--color-text-secondary)]">
+                <p className="font-semibold text-[var(--color-text-primary)]">Transaction in progress</p>
+                <p className="mt-1">Submitting claim and waiting for state sync.</p>
+              </div>
+            ) : null}
+
             {claimTxHash ? (
               <div className="rounded-[var(--radius-md)] border border-[var(--color-success-100)] bg-[var(--color-success-100)] p-3 text-[var(--color-success-700)]">
                 <p className="font-semibold">Claim transaction submitted.</p>
@@ -1219,12 +1321,13 @@ export default function Home() {
         </Modal>
 
         <nav className="fixed bottom-3 left-3 right-3 z-30 rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-white/95 p-2 shadow-[0_14px_28px_rgb(15_23_40_/_12%)] backdrop-blur lg:hidden">
-          <ul className="grid grid-cols-4 gap-1">
+          <ul className="grid grid-cols-5 gap-1">
             {[
               { value: "home", label: "Home", icon: <Landmark size={16} /> },
               { value: "positions", label: "Positions", icon: <Coins size={16} /> },
               { value: "activity", label: "Activity", icon: <Activity size={16} /> },
               { value: "profile", label: "Profile", icon: <UserCircle2 size={16} /> },
+              { value: "faq", label: "FAQ", icon: <CircleHelp size={16} /> },
             ].map((option) => (
               <li key={option.value}>
                 <button
