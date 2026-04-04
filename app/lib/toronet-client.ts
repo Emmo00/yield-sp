@@ -1,4 +1,8 @@
-import type { ContractKey } from "@/app/lib/constants";
+import { createWallet, getAddr, verifyWalletPassword } from "torosdk";
+
+import { getConfiguredNetwork, type ContractKey } from "@/app/lib/constants";
+import { extractAddress, isHexAddress } from "@/app/lib/toronet-common";
+import { ensureToronetSDK } from "@/app/lib/toronet-sdk";
 
 interface ApiResponseShape {
   ok?: boolean;
@@ -57,23 +61,38 @@ export async function loginWithToronet(
   identifier: string,
   password: string,
 ): Promise<LoginResult> {
-  const response = await fetch("/api/auth/login", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ identifier, password }),
+  const normalizedIdentifier = identifier.trim();
+  if (!normalizedIdentifier || !password) {
+    throw new Error("Identifier and password are required.");
+  }
+
+  const network = ensureToronetSDK(getConfiguredNetwork());
+
+  let resolvedAddress: string | null = null;
+  if (isHexAddress(normalizedIdentifier)) {
+    resolvedAddress = normalizedIdentifier;
+  } else {
+    const lookup = await getAddr({ name: normalizedIdentifier });
+    resolvedAddress = extractAddress(lookup);
+  }
+
+  if (!resolvedAddress) {
+    throw new Error("Invalid credentials.");
+  }
+
+  const isValid = await verifyWalletPassword({
+    address: resolvedAddress,
+    password,
   });
 
-  const payload = await parseJsonResponse(response);
-  if (!response.ok || !payload?.ok || !payload.address) {
-    throw new Error(toErrorMessage(payload, "Login failed."));
+  if (!isValid) {
+    throw new Error("Invalid credentials.");
   }
 
   return {
-    address: payload.address,
-    identifier: payload.identifier ?? identifier,
-    network: payload.network,
+    address: resolvedAddress,
+    identifier: normalizedIdentifier,
+    network,
   };
 }
 
@@ -81,23 +100,25 @@ export async function signupWithToronet(
   username: string,
   password: string,
 ): Promise<SignupResult> {
-  const response = await fetch("/api/auth/signup", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ username, password }),
+  const normalizedUsername = username.trim();
+  if (!normalizedUsername || !password) {
+    throw new Error("Username and password are required.");
+  }
+
+  const network = ensureToronetSDK(getConfiguredNetwork());
+  const address = await createWallet({
+    username: normalizedUsername,
+    password,
   });
 
-  const payload = await parseJsonResponse(response);
-  if (!response.ok || !payload?.ok || !payload.address) {
-    throw new Error(toErrorMessage(payload, "Sign-up failed."));
+  if (!isHexAddress(address)) {
+    throw new Error("Could not create account.");
   }
 
   return {
-    address: payload.address,
-    username: payload.username ?? username,
-    network: payload.network,
+    address,
+    username: normalizedUsername,
+    network,
   };
 }
 
