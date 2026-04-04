@@ -8,7 +8,7 @@ export const CONTRACT_ADDRESSES = {
     },
     testnet: {
         "loan-vault": "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd",
-        stablecoin: "0x1234561234561234561234561234561234561234",
+        stablecoin: "0xa07925A08bF15335a373bf2DdB1b2a26F1B13a20",
     },
 } as const;
 
