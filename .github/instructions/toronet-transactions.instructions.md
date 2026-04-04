@@ -7,6 +7,8 @@ description: To be used when asked to interact with smart contracts on toronet
 
 Use these instructions when asked to interact with smart contracts on toronet with an api. The instructions include examples of how to read and write transactions on toronet using the provided API endpoints.
 
+For read calls, you should use wagmi or ethers.js to query the blockchain and retrieve data from smart contracts. For write calls, you should use the API documentation in the provided postman collection to perform write transactions on toronet. The collection includes endpoints for signing messages, calling contract functions, and sending transactions. You can use the provided request bodies as templates for your API calls. Make sure to replace the placeholder values with actual data when making requests.
+
 # Read Transactions on Toronet
 
 Use this guide when you want to read data from smart contracts on Toronet.
