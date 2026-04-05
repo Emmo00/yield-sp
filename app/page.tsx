@@ -256,6 +256,8 @@ export default function Home() {
   const [buyInProgress, setBuyInProgress] = useState<BuyInProgress>("idle");
   const [buyInAmountInput, setBuyInAmountInput] = useState("100");
   const [buyInDraft, setBuyInDraft] = useState<BuyInDraft | null>(null);
+  const [topUpModalOpen, setTopUpModalOpen] = useState(false);
+  const [topUpAddressCopied, setTopUpAddressCopied] = useState(false);
   const [buyInFlowError, setBuyInFlowError] = useState("");
   const [buyInApproveTxHash, setBuyInApproveTxHash] = useState("");
   const [buyInTxHash, setBuyInTxHash] = useState("");
@@ -380,6 +382,44 @@ export default function Home() {
     () => activeAction === null && (hasReadyPosition || portfolio.availablePayout > BigInt(0)),
     [activeAction, hasReadyPosition, portfolio.availablePayout],
   );
+
+  const buyInAmountPreview = useMemo(() => {
+    const normalized = buyInAmountInput.trim();
+    if (!normalized) {
+      return {
+        units: null as bigint | null,
+        isValid: false,
+      };
+    }
+
+    try {
+      const units = BigInt(toUnits(normalized, portfolio.decimals));
+      if (units <= BigInt(0)) {
+        return {
+          units: null as bigint | null,
+          isValid: false,
+        };
+      }
+
+      return {
+        units,
+        isValid: true,
+      };
+    } catch {
+      return {
+        units: null as bigint | null,
+        isValid: false,
+      };
+    }
+  }, [buyInAmountInput, portfolio.decimals]);
+
+  const buyInHasInsufficientBalance = useMemo(() => {
+    if (!buyInAmountPreview.units) {
+      return false;
+    }
+
+    return buyInAmountPreview.units > portfolio.stablecoinBalance;
+  }, [buyInAmountPreview.units, portfolio.stablecoinBalance]);
 
   const buyInModalError = useMemo(() => {
     if (!buyInModalOpen) {
@@ -638,6 +678,7 @@ export default function Home() {
     clearStoredSession();
     setSession(null);
     setBuyInModalOpen(false);
+    setTopUpModalOpen(false);
     setClaimModalOpen(false);
     setClaimStep("review");
     setClaimFlowError("");
@@ -668,6 +709,8 @@ export default function Home() {
     setBuyInProgress("idle");
     setBuyInFlowError("");
     setBuyInDraft(null);
+    setTopUpModalOpen(false);
+    setTopUpAddressCopied(false);
     setBuyInApproveTxHash("");
     setBuyInTxHash("");
   }
@@ -683,8 +726,33 @@ export default function Home() {
       return;
     }
 
+    setTopUpModalOpen(false);
     setBuyInModalOpen(false);
     resetBuyInFlow();
+  }
+
+  function openTopUpModal() {
+    setTopUpAddressCopied(false);
+    setTopUpModalOpen(true);
+  }
+
+  function closeTopUpModal() {
+    setTopUpModalOpen(false);
+    setTopUpAddressCopied(false);
+  }
+
+  async function copyTopUpAddressToClipboard() {
+    if (!session || typeof navigator === "undefined" || !navigator.clipboard) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(session.address);
+      setTopUpAddressCopied(true);
+      window.setTimeout(() => setTopUpAddressCopied(false), 1800);
+    } catch {
+      setTopUpAddressCopied(false);
+    }
   }
 
   function buildBuyInDraft(amountValue: string): BuyInDraft {
@@ -696,6 +764,10 @@ export default function Home() {
     const amountUnits = BigInt(toUnits(normalized, portfolio.decimals));
     if (amountUnits <= BigInt(0)) {
       throw new Error("Amount must be greater than zero.");
+    }
+
+    if (amountUnits > portfolio.stablecoinBalance) {
+      throw new Error("Insufficient wallet balance. Use top up to fund your wallet.");
     }
 
     const feeAmount = (amountUnits * portfolio.buyInFeeBps) / BigInt(10000);
@@ -1300,7 +1372,11 @@ export default function Home() {
                 <Button variant="ghost" className="flex-1" onClick={closeBuyInModal}>
                   Cancel
                 </Button>
-                <Button className="flex-1" onClick={proceedBuyInReview}>
+                <Button
+                  className="flex-1"
+                  onClick={proceedBuyInReview}
+                  disabled={!buyInAmountPreview.isValid || buyInHasInsufficientBalance}
+                >
                   Continue
                   <ArrowRight size={16} />
                 </Button>
@@ -1348,9 +1424,24 @@ export default function Home() {
                     placeholder="100"
                   />
                 </Field>
+                <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-3 py-2 text-sm text-[var(--color-text-secondary)]">
+                  Wallet balance: <strong>{formatToken(portfolio.stablecoinBalance)}</strong>
+                </div>
                 <p className="text-sm text-[var(--color-text-secondary)]">
                   Step 1 help: enter the amount you want to invest.
                 </p>
+                {buyInHasInsufficientBalance ? (
+                  <div className="rounded-[var(--radius-md)] border border-[var(--color-warning-100)] bg-[var(--color-warning-100)] px-3 py-2 text-sm text-[var(--color-warning-700)]">
+                    <p className="font-semibold">Balance is not enough for this buy-in amount.</p>
+                    <button
+                      type="button"
+                      onClick={openTopUpModal}
+                      className="mt-1 font-semibold underline"
+                    >
+                      Not enough cash? Top up
+                    </button>
+                  </div>
+                ) : null}
                 <div className="rounded-[var(--radius-md)] border border-[var(--color-info-100)] bg-[var(--color-info-100)] px-3 py-2 text-sm text-[var(--color-info-700)]">
                   You confirm once. The app submits approve, then buyIn.
                 </div>
@@ -1437,6 +1528,43 @@ export default function Home() {
                 {buyInModalError}
               </p>
             ) : null}
+          </div>
+        </Modal>
+
+        <Modal
+          isOpen={topUpModalOpen}
+          title="Top Up Wallet"
+          subtitle="Send funds to this wallet, then refresh and continue buy-in."
+          onClose={closeTopUpModal}
+          footer={
+            <>
+              <Button variant="ghost" className="flex-1" onClick={closeTopUpModal}>
+                Close
+              </Button>
+              <Button
+                className="flex-1"
+                onClick={() => {
+                  void copyTopUpAddressToClipboard();
+                }}
+              >
+                {topUpAddressCopied ? "Address Copied" : "Copy Wallet Address"}
+              </Button>
+            </>
+          }
+        >
+          <div className="space-y-3 text-sm">
+            <p className="text-[var(--color-text-secondary)]">
+              Transfer <strong>{portfolio.symbol}</strong> to your wallet address below.
+            </p>
+            <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-tertiary)]">
+                Wallet Address
+              </p>
+              <p className="mt-2 break-all font-mono text-sm text-[var(--color-text-primary)]">{session.address}</p>
+            </div>
+            <p className="text-xs text-[var(--color-text-tertiary)]">
+              Network: {network}. After funding, refresh dashboard balances and continue the buy-in flow.
+            </p>
           </div>
         </Modal>
 
