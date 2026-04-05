@@ -44,7 +44,7 @@ import {
   saveStoredSession,
   type ToronetSession,
 } from "@/app/lib/session";
-import { formatUnits, toUnits } from "@/app/lib/units";
+import { formatBpsAsPercent, formatUnits, toUnits } from "@/app/lib/units";
 
 type AuthMode = "login" | "signup";
 type UserTab = "home" | "positions" | "activity" | "profile" | "faq";
@@ -138,6 +138,21 @@ const FAQ_ITEMS = [
   },
 ] as const;
 
+function formatCountdownDHMS(totalSeconds: bigint): string {
+  const dayInSeconds = BigInt(86400);
+  const hourInSeconds = BigInt(3600);
+  const minuteInSeconds = BigInt(60);
+
+  const normalized = totalSeconds > BigInt(0) ? totalSeconds : BigInt(0);
+  const days = normalized / dayInSeconds;
+  const hours = (normalized % dayInSeconds) / hourInSeconds;
+  const minutes = (normalized % hourInSeconds) / minuteInSeconds;
+  const seconds = normalized % minuteInSeconds;
+
+  const pad2 = (value: bigint) => value.toString().padStart(2, "0");
+  return `${days.toString()}:${pad2(hours)}:${pad2(minutes)}:${pad2(seconds)}`;
+}
+
 function parsePositions(value: unknown, lockPeriodSeconds: bigint): PositionRecord[] {
   const extracted = extractResultValue(value);
   let candidates: unknown[] = [];
@@ -227,6 +242,7 @@ export default function Home() {
   const [tab, setTab] = useState<UserTab>("home");
   const [portfolio, setPortfolio] = useState<PortfolioState>(INITIAL_PORTFOLIO);
   const [portfolioLoading, setPortfolioLoading] = useState(false);
+  const [countdownNow, setCountdownNow] = useState<bigint>(BigInt(Math.floor(Date.now() / 1000)));
 
   const [buyInModalOpen, setBuyInModalOpen] = useState(false);
   const [buyInStep, setBuyInStep] = useState<BuyInFlowStep>("amount");
@@ -267,6 +283,41 @@ export default function Home() {
     (value: bigint, precision = 2) => `${formatUnits(value, portfolio.decimals, precision)} ${portfolio.symbol}`,
     [portfolio.decimals, portfolio.symbol],
   );
+
+  const nextPayoutCountdown = useMemo(() => {
+    if (portfolio.positions.length === 0) {
+      return {
+        value: "--:--:--:--",
+        note: "No active positions",
+      };
+    }
+
+    let nextMaturity: bigint | null = null;
+    for (const position of portfolio.positions) {
+      if (position.maturityTime <= countdownNow) {
+        return {
+          value: "00:00:00:00",
+          note: "Payout can be claimed now",
+        };
+      }
+
+      if (nextMaturity === null || position.maturityTime < nextMaturity) {
+        nextMaturity = position.maturityTime;
+      }
+    }
+
+    if (nextMaturity === null) {
+      return {
+        value: "--:--:--:--",
+        note: "No active positions",
+      };
+    }
+
+    return {
+      value: formatCountdownDHMS(nextMaturity - countdownNow),
+      note: "Day:Hour:Minute:Second",
+    };
+  }, [countdownNow, portfolio.positions]);
 
   const refreshPortfolio = useCallback(
     async (activeSession: ToronetSession) => {
@@ -395,6 +446,16 @@ export default function Home() {
     const existingSession = getStoredSession();
     setSession(existingSession);
     setHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setCountdownNow(BigInt(Math.floor(Date.now() / 1000)));
+    }, 1000);
+
+    return () => {
+      window.clearInterval(timer);
+    };
   }, []);
 
   useEffect(() => {
@@ -903,7 +964,7 @@ export default function Home() {
         <div className="mt-4 grid gap-4">
           {tab === "home" ? (
             <>
-              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
                 <MetricCard
                   label="Wallet Balance"
                   value={formatToken(portfolio.stablecoinBalance)}
@@ -912,6 +973,12 @@ export default function Home() {
                 <MetricCard label="Available Payout" value={formatToken(portfolio.availablePayout)} />
                 <MetricCard label="Total Invested" value={formatToken(portfolio.totalInvested)} />
                 <MetricCard label="Projected Payout" value={formatToken(portfolio.projectedPayout)} />
+                <MetricCard
+                  label="Next Payout"
+                  value={nextPayoutCountdown.value}
+                  note={nextPayoutCountdown.note}
+                  tone={nextPayoutCountdown.value === "00:00:00:00" ? "success" : "default"}
+                />
               </div>
 
               <div className="grid gap-4 md:grid-cols-2">
@@ -922,10 +989,10 @@ export default function Home() {
                     </p>
                     <div className="grid gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-sm text-[var(--color-text-secondary)] sm:grid-cols-3">
                       <span>
-                        Fee: <strong>{portfolio.buyInFeeBps.toString()} bps</strong>
+                        Fee: <strong>{formatBpsAsPercent(portfolio.buyInFeeBps)}</strong>
                       </span>
                       <span>
-                        Yield: <strong>{portfolio.yieldBps.toString()} bps</strong>
+                        Yield: <strong>{formatBpsAsPercent(portfolio.yieldBps)}</strong>
                       </span>
                       <span>
                         Symbol: <strong>{portfolio.symbol}</strong>
@@ -947,6 +1014,9 @@ export default function Home() {
                   <div className="space-y-3 text-sm text-[var(--color-text-secondary)]">
                     <p>
                       Claimable now: <strong>{formatToken(portfolio.availablePayout)}</strong>
+                    </p>
+                    <p>
+                      Next payout countdown: <strong>{nextPayoutCountdown.value}</strong>
                     </p>
                     <Button
                       disabled={
@@ -1178,13 +1248,13 @@ export default function Home() {
                     Gross amount: <strong>{buyInDraft.amountInput} {portfolio.symbol}</strong>
                   </p>
                   <p>
-                    Buy-in fee ({portfolio.buyInFeeBps.toString()} bps): <strong>{formatToken(buyInDraft.feeAmount)}</strong>
+                    Buy-in fee ({formatBpsAsPercent(portfolio.buyInFeeBps)}): <strong>{formatToken(buyInDraft.feeAmount)}</strong>
                   </p>
                   <p>
                     Net principal: <strong>{formatToken(buyInDraft.netPrincipal)}</strong>
                   </p>
                   <p>
-                    Projected payout ({portfolio.yieldBps.toString()} bps): <strong>{formatToken(buyInDraft.projectedPayout)}</strong>
+                    Projected payout ({formatBpsAsPercent(portfolio.yieldBps)}): <strong>{formatToken(buyInDraft.projectedPayout)}</strong>
                   </p>
                   <p>
                     Wallet after buy-in:
