@@ -26,8 +26,15 @@ import {
 } from "@/app/lib/constants";
 import { formatDate, shortAddress } from "@/app/lib/format";
 import {
+  activityActionToTitle,
+  type ActivityLogRecord,
+  type ActivityLogWriteInput,
+} from "@/app/lib/activity-log";
+import {
+  fetchActivityHistoryApi,
   getToronetUsernameByAddress,
   loginWithToronet,
+  logActivityEventApi,
   queryToronetContractApi,
   signupWithToronet,
   writeToronetContractApi,
@@ -279,6 +286,51 @@ export default function Home() {
     [],
   );
 
+  const mapPersistedActivity = useCallback((item: ActivityLogRecord): ActivityRecord => {
+    const when = item.createdAt || item.clientTimestamp || new Date().toISOString();
+
+    return {
+      id: item.id,
+      title: activityActionToTitle(item.action),
+      detail: item.detail,
+      when,
+      status: item.status,
+      txHash: item.txHash,
+    };
+  }, []);
+
+  const refreshActivityHistory = useCallback(
+    async (activeSession: ToronetSession) => {
+      try {
+        const items = await fetchActivityHistoryApi(activeSession.address, 50);
+        setActivity(items.map(mapPersistedActivity));
+      } catch {
+        // Keep local activity entries if persistence is unavailable.
+      }
+    },
+    [mapPersistedActivity],
+  );
+
+  const persistActivity = useCallback(
+    async (
+      activeSession: ToronetSession,
+      payload: Omit<ActivityLogWriteInput, "userAddress">,
+    ) => {
+      try {
+        await logActivityEventApi({
+          userAddress: activeSession.address,
+          clientTimestamp: payload.clientTimestamp ?? new Date().toISOString(),
+          ...payload,
+        });
+
+        await refreshActivityHistory(activeSession);
+      } catch {
+        // Do not block transaction UX on activity persistence issues.
+      }
+    },
+    [refreshActivityHistory],
+  );
+
   const formatToken = useCallback(
     (value: bigint, precision = 2) => `${formatUnits(value, portfolio.decimals, precision)} ${portfolio.symbol}`,
     [portfolio.decimals, portfolio.symbol],
@@ -474,7 +526,8 @@ export default function Home() {
     }
 
     void refreshPortfolio(session);
-  }, [session, refreshPortfolio]);
+    void refreshActivityHistory(session);
+  }, [session, refreshActivityHistory, refreshPortfolio]);
 
   useEffect(() => {
     let cancelled = false;
@@ -700,6 +753,15 @@ export default function Home() {
         "completed",
         buyInResponse,
       );
+      void persistActivity(session, {
+        action: "buyInSubmitted",
+        status: "completed",
+        detail: `Submitted buyIn(${buyInDraft.amountInput} ${portfolio.symbol}).`,
+        txHash: submittedTxHash || undefined,
+        amountUnits: buyInDraft.amountUnits.toString(),
+        symbol: portfolio.symbol,
+        decimals: portfolio.decimals,
+      });
 
       // Apply an immediate optimistic update so dashboard metrics react instantly.
       setPortfolio((previous) => ({
@@ -730,6 +792,14 @@ export default function Home() {
       setBuyInStep("review");
       setBuyInFlowError(message);
       addActivity("Buy-in flow", message, "failed");
+      void persistActivity(session, {
+        action: "buyInFailed",
+        status: "failed",
+        detail: message,
+        amountUnits: buyInDraft.amountUnits.toString(),
+        symbol: portfolio.symbol,
+        decimals: portfolio.decimals,
+      });
     } finally {
       setActiveAction(null);
     }
@@ -771,13 +841,23 @@ export default function Home() {
         args: [session.address],
       });
 
-      setClaimTxHash(extractTxHash(response) ?? "");
+      const claimTxHashValue = extractTxHash(response) ?? "";
+      setClaimTxHash(claimTxHashValue);
       addActivity(
         "Payout claimed",
         "Submitted claimPayout for matured positions.",
         "completed",
         response,
       );
+      void persistActivity(session, {
+        action: "claimPayoutSubmitted",
+        status: "completed",
+        detail: "Submitted claimPayout for matured positions.",
+        txHash: claimTxHashValue || undefined,
+        amountUnits: portfolio.availablePayout.toString(),
+        symbol: portfolio.symbol,
+        decimals: portfolio.decimals,
+      });
 
       // Show immediate feedback while we synchronize exact values from chain.
       setPortfolio((previous) => ({
@@ -802,6 +882,14 @@ export default function Home() {
       setClaimFlowError(message);
       setActionError(message);
       addActivity("claimPayout", message, "failed");
+      void persistActivity(session, {
+        action: "claimPayoutFailed",
+        status: "failed",
+        detail: message,
+        amountUnits: portfolio.availablePayout.toString(),
+        symbol: portfolio.symbol,
+        decimals: portfolio.decimals,
+      });
     } finally {
       setActiveAction(null);
     }

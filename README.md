@@ -18,6 +18,18 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
+## Environment
+
+Set these variables to enable persisted activity logging:
+
+```bash
+MONGODB_URI=mongodb+srv://<user>:<password>@<cluster>/<database>?retryWrites=true&w=majority
+# Optional. If omitted, the database name is inferred from MONGODB_URI.
+MONGODB_DB=yield_sp
+```
+
+The app writes user activity metadata (buy-ins and claims) to MongoDB through `app/api/activity/route.ts`.
+
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
 ## Learn More

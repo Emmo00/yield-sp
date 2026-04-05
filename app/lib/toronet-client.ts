@@ -1,5 +1,9 @@
 import { createWallet, getAddr, getName, verifyWalletPassword } from "torosdk";
 
+import type {
+  ActivityLogRecord,
+  ActivityLogWriteInput,
+} from "@/app/lib/activity-log";
 import {
   getConfiguredNetwork,
   type ContractKey,
@@ -192,4 +196,60 @@ export async function mintOnToronetTestnet(params: {
   });
 
   return result.raw;
+}
+
+export async function logActivityEventApi(payload: ActivityLogWriteInput): Promise<void> {
+  const response = await fetch("/api/activity", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const fallback = "Could not persist activity event.";
+
+    let message = fallback;
+    try {
+      const parsed = (await response.json()) as { error?: string };
+      message = parsed.error || fallback;
+    } catch {
+      message = fallback;
+    }
+
+    throw new Error(message);
+  }
+}
+
+export async function fetchActivityHistoryApi(
+  address: string,
+  limit = 50,
+): Promise<ActivityLogRecord[]> {
+  const params = new URLSearchParams({
+    address,
+    limit: String(limit),
+  });
+
+  const response = await fetch(`/api/activity?${params.toString()}`, {
+    method: "GET",
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    const fallback = "Could not fetch activity history.";
+
+    let message = fallback;
+    try {
+      const parsed = (await response.json()) as { error?: string };
+      message = parsed.error || fallback;
+    } catch {
+      message = fallback;
+    }
+
+    throw new Error(message);
+  }
+
+  const payload = (await response.json()) as { items?: ActivityLogRecord[] };
+  return Array.isArray(payload.items) ? payload.items : [];
 }
