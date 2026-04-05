@@ -4,7 +4,7 @@ import { Activity, CircleDollarSign, Landmark, RefreshCcw, Settings2, Wallet } f
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { Badge, Button, Card, Field, MetricCard, Segmented } from "@/app/components/vault-ui";
+import { Badge, Button, Card, Field, MetricCard, Modal, Segmented } from "@/app/components/vault-ui";
 import {
   getConfiguredNetwork,
   getContractAddress,
@@ -17,6 +17,7 @@ import { getStoredSession, type ToronetSession } from "@/app/lib/session";
 import { formatUnits, toUnits } from "@/app/lib/units";
 
 type AdminTab = "overview" | "funding" | "parameters" | "activity";
+type AdminActionKey = "depositYield" | "setBuyInFeePercentage" | "setYieldPercentage" | "setLockPeriod";
 
 interface AdminSnapshot {
   decimals: number;
@@ -67,6 +68,8 @@ export default function AdminPage() {
   const [lockPeriodInput, setLockPeriodInput] = useState("");
   const [useCustomDepositAmount, setUseCustomDepositAmount] = useState(false);
   const [customDepositAmountInput, setCustomDepositAmountInput] = useState("");
+  const [confirmAction, setConfirmAction] = useState<AdminActionKey | null>(null);
+  const [confirmSubmitting, setConfirmSubmitting] = useState(false);
 
   const [activity, setActivity] = useState<AdminActivity[]>([]);
 
@@ -262,9 +265,9 @@ export default function AdminPage() {
     }
   }, [lockPeriodInput, snapshot.lockPeriodSeconds]);
 
-  async function runAction(label: string, operation: () => Promise<unknown>) {
+  async function runAction(label: string, operation: () => Promise<unknown>): Promise<boolean> {
     if (!session) {
-      return;
+      return false;
     }
 
     setActionLoading(label);
@@ -274,28 +277,30 @@ export default function AdminPage() {
       const response = await operation();
       addActivity(label, `${label} submitted successfully.`, "completed", response);
       await refreshSnapshot(session);
+      return true;
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : "Action failed.";
       setError(message);
       addActivity(label, message, "failed");
+      return false;
     } finally {
       setActionLoading(null);
     }
   }
 
-  async function depositYield() {
+  async function depositYield(): Promise<boolean> {
     if (!session) {
-      return;
+      return false;
     }
 
     if (!depositAmountPreview.valid) {
       setError(depositAmountPreview.error || "Invalid deposit amount.");
-      return;
+      return false;
     }
 
     const amountArg = depositAmountPreview.units.toString();
 
-    await runAction("depositYield", () =>
+    return runAction("depositYield", () =>
       writeToronetContractApi({
         address: session.address,
         password: session.password,
@@ -306,18 +311,18 @@ export default function AdminPage() {
     );
   }
 
-  async function setBuyInFee() {
+  async function setBuyInFee(): Promise<boolean> {
     if (!session) {
-      return;
+      return false;
     }
 
     const normalized = feeBpsInput.trim();
     if (!/^\d+$/.test(normalized)) {
       setError("Entry fee must be an integer basis points value.");
-      return;
+      return false;
     }
 
-    await runAction("setBuyInFeePercentage", () =>
+    return runAction("setBuyInFeePercentage", () =>
       writeToronetContractApi({
         address: session.address,
         password: session.password,
@@ -328,18 +333,18 @@ export default function AdminPage() {
     );
   }
 
-  async function setYield() {
+  async function setYield(): Promise<boolean> {
     if (!session) {
-      return;
+      return false;
     }
 
     const normalized = yieldBpsInput.trim();
     if (!/^\d+$/.test(normalized)) {
       setError("Yield percentage must be an integer basis points value.");
-      return;
+      return false;
     }
 
-    await runAction("setYieldPercentage", () =>
+    return runAction("setYieldPercentage", () =>
       writeToronetContractApi({
         address: session.address,
         password: session.password,
@@ -350,18 +355,18 @@ export default function AdminPage() {
     );
   }
 
-  async function setLockPeriod() {
+  async function setLockPeriod(): Promise<boolean> {
     if (!session) {
-      return;
+      return false;
     }
 
     const normalized = lockPeriodInput.trim();
     if (!/^\d+$/.test(normalized)) {
       setError("LOCK_PERIOD must be an integer number of seconds.");
-      return;
+      return false;
     }
 
-    await runAction("setLockPeriod", () =>
+    return runAction("setLockPeriod", () =>
       writeToronetContractApi({
         address: session.address,
         password: session.password,
@@ -370,6 +375,119 @@ export default function AdminPage() {
         args: [normalized],
       }),
     );
+  }
+
+  function requestActionConfirmation(action: AdminActionKey) {
+    setError("");
+
+    if (action === "depositYield" && !depositAmountPreview.valid) {
+      setError(depositAmountPreview.error || "Invalid deposit amount.");
+      return;
+    }
+
+    if (action === "setBuyInFeePercentage" && !/^\d+$/.test(feeBpsInput.trim())) {
+      setError("Entry fee must be an integer basis points value.");
+      return;
+    }
+
+    if (action === "setYieldPercentage" && !/^\d+$/.test(yieldBpsInput.trim())) {
+      setError("Yield percentage must be an integer basis points value.");
+      return;
+    }
+
+    if (action === "setLockPeriod" && !/^\d+$/.test(lockPeriodInput.trim())) {
+      setError("LOCK_PERIOD must be an integer number of seconds.");
+      return;
+    }
+
+    setConfirmAction(action);
+  }
+
+  function closeConfirmationModal() {
+    if (confirmSubmitting || actionLoading !== null) {
+      return;
+    }
+
+    setConfirmAction(null);
+  }
+
+  const confirmContent = useMemo(() => {
+    if (!confirmAction) {
+      return null;
+    }
+
+    if (confirmAction === "depositYield") {
+      return {
+        title: "Confirm depositYield",
+        subtitle: "Review funding amount before submitting transaction.",
+        confirmLabel: "Confirm Deposit",
+        items: [
+          { label: "Mode", value: useCustomDepositAmount ? "Custom amount" : "Default shortfall" },
+          { label: "Amount", value: depositAmountPreview.display || "-" },
+          { label: "Shortfall", value: formatToken(snapshot.shortfall) },
+        ],
+      };
+    }
+
+    if (confirmAction === "setBuyInFeePercentage") {
+      return {
+        title: "Confirm setBuyInFeePercentage",
+        subtitle: "This updates the protocol entry fee for future buy-ins.",
+        confirmLabel: "Confirm Fee Update",
+        items: [
+          { label: "Current", value: `${snapshot.buyInFeeBps.toString()} bps` },
+          { label: "New", value: `${feeBpsInput.trim()} bps` },
+        ],
+      };
+    }
+
+    if (confirmAction === "setYieldPercentage") {
+      return {
+        title: "Confirm setYieldPercentage",
+        subtitle: "This updates projected payout yield for future buy-ins.",
+        confirmLabel: "Confirm Yield Update",
+        items: [
+          { label: "Current", value: `${snapshot.yieldBps.toString()} bps` },
+          { label: "New", value: `${yieldBpsInput.trim()} bps` },
+        ],
+      };
+    }
+
+    return {
+      title: "Confirm setLockPeriod",
+      subtitle: "This changes how long positions remain locked before claim.",
+      confirmLabel: "Confirm Lock Period",
+      items: [
+        { label: "Current", value: `${formatLockPeriod(snapshot.lockPeriodSeconds)} (${snapshot.lockPeriodSeconds.toString()} sec)` },
+        { label: "New", value: `${formatLockPeriod(BigInt(lockPeriodInput.trim()))} (${lockPeriodInput.trim()} sec)` },
+      ],
+    };
+  }, [confirmAction, depositAmountPreview.display, feeBpsInput, formatLockPeriod, formatToken, lockPeriodInput, snapshot.buyInFeeBps, snapshot.lockPeriodSeconds, snapshot.shortfall, snapshot.yieldBps, useCustomDepositAmount]);
+
+  async function executeConfirmedAction() {
+    if (!confirmAction || confirmSubmitting) {
+      return;
+    }
+
+    setConfirmSubmitting(true);
+
+    let success = false;
+
+    if (confirmAction === "depositYield") {
+      success = await depositYield();
+    } else if (confirmAction === "setBuyInFeePercentage") {
+      success = await setBuyInFee();
+    } else if (confirmAction === "setYieldPercentage") {
+      success = await setYield();
+    } else {
+      success = await setLockPeriod();
+    }
+
+    setConfirmSubmitting(false);
+
+    if (success) {
+      setConfirmAction(null);
+    }
   }
 
   if (loadingSession) {
@@ -512,7 +630,7 @@ export default function AdminPage() {
                       (useCustomDepositAmount && !depositAmountPreview.valid)
                     }
                     onClick={() => {
-                      void depositYield();
+                      requestActionConfirmation("depositYield");
                     }}
                   >
                     <Wallet size={16} />
@@ -563,7 +681,7 @@ export default function AdminPage() {
                   <Button
                     disabled={actionLoading !== null}
                     onClick={() => {
-                      void setBuyInFee();
+                      requestActionConfirmation("setBuyInFeePercentage");
                     }}
                   >
                     <CircleDollarSign size={16} />
@@ -588,7 +706,7 @@ export default function AdminPage() {
                   <Button
                     disabled={actionLoading !== null}
                     onClick={() => {
-                      void setYield();
+                      requestActionConfirmation("setYieldPercentage");
                     }}
                   >
                     <Settings2 size={16} />
@@ -611,7 +729,7 @@ export default function AdminPage() {
                   <Button
                     disabled={actionLoading !== null}
                     onClick={() => {
-                      void setLockPeriod();
+                      requestActionConfirmation("setLockPeriod");
                     }}
                   >
                     <Settings2 size={16} />
@@ -657,6 +775,51 @@ export default function AdminPage() {
             </Card>
           ) : null}
         </div>
+
+        <Modal
+          isOpen={Boolean(confirmAction && confirmContent)}
+          title={confirmContent?.title ?? "Confirm action"}
+          subtitle={confirmContent?.subtitle ?? "Review details before sending transaction."}
+          onClose={closeConfirmationModal}
+          footer={
+            <>
+              <Button
+                variant="ghost"
+                className="flex-1"
+                onClick={closeConfirmationModal}
+                disabled={confirmSubmitting || actionLoading !== null}
+              >
+                Cancel
+              </Button>
+              <Button
+                className="flex-1"
+                onClick={() => {
+                  void executeConfirmedAction();
+                }}
+                disabled={confirmSubmitting || actionLoading !== null}
+              >
+                {confirmSubmitting || actionLoading !== null
+                  ? "Submitting..."
+                  : confirmContent?.confirmLabel ?? "Confirm"}
+              </Button>
+            </>
+          }
+        >
+          {confirmContent ? (
+            <div className="space-y-3">
+              <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3">
+                {confirmContent.items.map((item) => (
+                  <p key={item.label} className="mt-1 text-sm text-[var(--color-text-secondary)] first:mt-0">
+                    <strong className="text-[var(--color-text-primary)]">{item.label}:</strong> {item.value}
+                  </p>
+                ))}
+              </div>
+              <p className="text-xs text-[var(--color-text-tertiary)]">
+                This action cannot be undone. Confirm to submit transaction.
+              </p>
+            </div>
+          ) : null}
+        </Modal>
 
         <nav className="fixed bottom-3 left-3 right-3 z-30 rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-white/95 p-2 shadow-[0_14px_28px_rgb(15_23_40_/_12%)] backdrop-blur lg:hidden">
           <ul className="grid grid-cols-4 gap-1">
