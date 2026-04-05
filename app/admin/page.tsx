@@ -321,15 +321,23 @@ export default function AdminPage() {
 
     const amountArg = depositAmountPreview.units.toString();
 
-    return runAction("depositYield", () =>
-      writeToronetContractApi({
+    return runAction("depositYield", async () => {
+      await writeToronetContractApi({
+        address: session.address,
+        password: session.password,
+        contract: "stablecoin",
+        functionName: "approve",
+        args: [vaultAddress, amountArg],
+      });
+
+      return writeToronetContractApi({
         address: session.address,
         password: session.password,
         contract: "loan-vault",
         functionName: "depositYield",
         args: [amountArg],
-      }),
-    );
+      });
+    });
   }
 
   async function setBuyInFee(): Promise<boolean> {
@@ -436,7 +444,7 @@ export default function AdminPage() {
     if (confirmAction === "depositYield") {
       return {
         title: "Confirm depositYield",
-        subtitle: "Review funding amount before submitting transaction.",
+        subtitle: "Review funding amount. The app will submit approve, then depositYield.",
         confirmLabel: "Confirm Deposit",
         items: [
           { label: "Mode", value: useCustomDepositAmount ? "Custom amount" : "Default shortfall" },
@@ -480,6 +488,14 @@ export default function AdminPage() {
       ],
     };
   }, [confirmAction, depositAmountPreview.display, feePercentInput, formatLockPeriod, formatToken, lockPeriodInput, snapshot.buyInFeeBps, snapshot.lockPeriodSeconds, snapshot.shortfall, snapshot.yieldBps, useCustomDepositAmount, yieldPercentInput]);
+
+  const confirmModalError = useMemo(() => {
+    if (!confirmAction) {
+      return "";
+    }
+
+    return error;
+  }, [confirmAction, error]);
 
   async function executeConfirmedAction() {
     if (!confirmAction || confirmSubmitting) {
@@ -833,6 +849,11 @@ export default function AdminPage() {
                   </p>
                 ))}
               </div>
+              {confirmModalError ? (
+                <p className="rounded-[var(--radius-md)] border border-[var(--color-error-100)] bg-[var(--color-error-100)] px-3 py-2 text-sm text-[var(--color-error-700)]">
+                  {confirmModalError}
+                </p>
+              ) : null}
               <p className="text-xs text-[var(--color-text-tertiary)]">
                 This action cannot be undone. Confirm to submit transaction.
               </p>

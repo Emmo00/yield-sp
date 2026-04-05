@@ -381,6 +381,22 @@ export default function Home() {
     [activeAction, hasReadyPosition, portfolio.availablePayout],
   );
 
+  const buyInModalError = useMemo(() => {
+    if (!buyInModalOpen) {
+      return "";
+    }
+
+    return buyInFlowError || actionError;
+  }, [actionError, buyInFlowError, buyInModalOpen]);
+
+  const claimModalError = useMemo(() => {
+    if (!claimModalOpen) {
+      return "";
+    }
+
+    return claimFlowError || actionError;
+  }, [actionError, claimFlowError, claimModalOpen]);
+
   const refreshPortfolio = useCallback(
     async (activeSession: ToronetSession) => {
       setPortfolioLoading(true);
@@ -1416,9 +1432,9 @@ export default function Home() {
               </div>
             ) : null}
 
-            {buyInFlowError ? (
+            {buyInModalError ? (
               <p className="rounded-[var(--radius-md)] border border-[var(--color-error-100)] bg-[var(--color-error-100)] px-3 py-2 text-sm text-[var(--color-error-700)]">
-                {buyInFlowError}
+                {buyInModalError}
               </p>
             ) : null}
           </div>
@@ -1497,9 +1513,9 @@ export default function Home() {
                 <p className="mt-1 break-all text-xs">Tx: {claimTxHash}</p>
               </div>
             ) : null}
-            {claimFlowError ? (
+            {claimModalError ? (
               <p className="rounded-[var(--radius-md)] border border-[var(--color-error-100)] bg-[var(--color-error-100)] px-3 py-2 text-sm text-[var(--color-error-700)]">
-                {claimFlowError}
+                {claimModalError}
               </p>
             ) : null}
           </div>
