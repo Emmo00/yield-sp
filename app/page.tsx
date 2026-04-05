@@ -109,32 +109,32 @@ const FAQ_ITEMS = [
   {
     question: "What credentials do I need to use the dashboard?",
     answer:
-      "Use your Toronet username or wallet address plus password. Once authenticated, your session is stored locally in this browser so actions can run without re-entering credentials each time.",
+      "Use your Toronet username or address and password. Your session is stored in this browser so you can continue without signing in again each action.",
   },
   {
     question: "What happens during the Buy-In flow?",
     answer:
-      "After you enter an amount and confirm once, the app executes approve first, then buyIn automatically. You will see progress and transaction hashes in the modal.",
+      "You enter an amount, review details, and confirm once. The app then runs approve and buyIn automatically and shows progress in the modal.",
   },
   {
     question: "Why can my balances update a few seconds after submit?",
     answer:
-      "Blockchain state can propagate with slight delay. The app updates metrics immediately, then runs follow-up refreshes so dashboard values reconcile with the latest on-chain state.",
+      "On-chain updates can settle with a short delay. The dashboard refreshes immediately and then retries to sync final values.",
   },
   {
     question: "How are fee and projected payout calculated?",
     answer:
-      "The app reads buyIn fee and yield percentages directly from LoanVault contract parameters. Your review step shows gross amount, fee amount, net principal, and projected payout before you confirm.",
+      "Fee and yield rates are read from LoanVault contract parameters. The review step shows gross amount, fee, net principal, and projected payout.",
   },
   {
     question: "When can I claim payout?",
     answer:
-      "You can claim when positions mature based on the lock period and when claimable amount is greater than zero. Use the Claim flow to submit claimPayout to your current wallet address.",
+      "You can claim when positions mature and your claimable amount is above zero. Claim is sent to your current wallet address.",
   },
   {
     question: "How do I switch between testnet and mainnet?",
     answer:
-      "Network mode is controlled by NEXT_PUBLIC_NETWORK_ENV. The badge at the top shows the active environment, and contract addresses/rpc settings follow that selection.",
+      "Set NEXT_PUBLIC_NETWORK_ENV to testnet or mainnet. The network badge confirms the active environment.",
   },
 ] as const;
 
@@ -755,8 +755,7 @@ export default function Home() {
           </div>
           <h1 className="mt-5 text-4xl font-bold leading-tight tracking-tight md:text-5xl">BizMarket Vault</h1>
           <p className="mt-4 text-base leading-7 text-[var(--color-text-secondary)]">
-            Authenticate with Toronet credentials to interact with LoanVault directly via the
-            Toronet API.
+            Sign in with Toronet credentials to use LoanVault.
           </p>
 
           <div className="mt-5 rounded-[var(--radius-md)] border border-[var(--color-info-100)] bg-[var(--color-info-100)] px-4 py-3 text-sm text-[var(--color-info-700)]">
@@ -772,6 +771,11 @@ export default function Home() {
                 { value: "signup", label: "Sign Up" },
               ]}
             />
+            <p className="mt-3 text-sm text-[var(--color-text-secondary)]">
+              {authMode === "login"
+                ? "Step 1: Enter your username or address and password."
+                : "Step 1: Choose a username and password to create a wallet."}
+            </p>
           </div>
 
           <div className="mt-5 space-y-4">
@@ -829,8 +833,8 @@ export default function Home() {
               {authLoading
                 ? "Processing..."
                 : authMode === "login"
-                  ? "Login with Toronet"
-                  : "Create Toronet Account"}
+                  ? "Sign In"
+                  : "Create Account"}
             </Button>
           </div>
         </section>
@@ -911,11 +915,10 @@ export default function Home() {
               </div>
 
               <div className="grid gap-4 md:grid-cols-2">
-                <Card title="Buy In" subtitle="Approve stablecoin and call buyIn">
+                <Card title="Buy In" subtitle="Guided 3-step flow">
                   <div className="space-y-4">
                     <p className="text-sm text-[var(--color-text-secondary)]">
-                      Start a guided flow to enter amount, review fee/yield breakdown, and submit
-                      approve + buyIn automatically after one final confirmation.
+                      Enter amount, review totals, then confirm once to submit approve and buyIn.
                     </p>
                     <div className="grid gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-sm text-[var(--color-text-secondary)] sm:grid-cols-3">
                       <span>
@@ -940,7 +943,7 @@ export default function Home() {
                   </div>
                 </Card>
 
-                <Card title="Claim Payout" subtitle="Call claimPayout to receive matured returns">
+                <Card title="Claim Payout" subtitle="Review and submit claimPayout">
                   <div className="space-y-3 text-sm text-[var(--color-text-secondary)]">
                     <p>
                       Claimable now: <strong>{formatToken(portfolio.availablePayout)}</strong>
@@ -953,7 +956,7 @@ export default function Home() {
                       onClick={openClaimModal}
                     >
                       <HandCoins size={16} />
-                      {activeAction === "claimPayout" ? "Claiming..." : "claimPayout"}
+                      {activeAction === "claimPayout" ? "Claiming..." : "Start Claim Flow"}
                     </Button>
                   </div>
                 </Card>
@@ -1004,7 +1007,7 @@ export default function Home() {
               <div className="space-y-3">
                 {activity.length === 0 ? (
                   <p className="text-sm text-[var(--color-text-secondary)]">
-                    No actions yet. Start with approve, buyIn, or claimPayout.
+                    No transactions yet. Start with Buy In or Claim Payout.
                   </p>
                 ) : (
                   activity.map((item) => (
@@ -1043,7 +1046,7 @@ export default function Home() {
           ) : null}
 
           {tab === "profile" ? (
-            <Card title="Profile" subtitle="Current session and contract endpoints">
+            <Card title="Profile" subtitle="Session and network details">
               <div className="space-y-3 text-sm text-[var(--color-text-secondary)]">
                 <p>
                   <strong>Address:</strong> {session.address}
@@ -1068,7 +1071,7 @@ export default function Home() {
           ) : null}
 
           {tab === "faq" ? (
-            <Card title="FAQ" subtitle="Common questions about using BizMarket Vault">
+            <Card title="FAQ" subtitle="Quick answers before you transact">
               <div className="space-y-3">
                 {FAQ_ITEMS.map((item) => (
                   <details
@@ -1094,11 +1097,11 @@ export default function Home() {
           title="Buy In Flow"
           subtitle={
             buyInStep === "amount"
-              ? "Step 1/3: Enter amount"
+              ? "Step 1 of 3: Enter amount"
               : buyInStep === "review"
-                ? "Step 2/3: Review transaction details"
+                ? "Step 2 of 3: Review details"
                 : buyInStep === "processing"
-                  ? "Step 3/3: Submitting approve + buyIn"
+                  ? "Step 3 of 3: Submitting transactions"
                   : "Completed"
           }
           onClose={closeBuyInModal}
@@ -1156,15 +1159,20 @@ export default function Home() {
                     placeholder="100"
                   />
                 </Field>
+                <p className="text-sm text-[var(--color-text-secondary)]">
+                  Step 1 help: enter the amount you want to invest.
+                </p>
                 <div className="rounded-[var(--radius-md)] border border-[var(--color-info-100)] bg-[var(--color-info-100)] px-3 py-2 text-sm text-[var(--color-info-700)]">
-                  Only one final confirmation is required. After you confirm, the app submits
-                  approve and buyIn back-to-back.
+                  You confirm once. The app submits approve, then buyIn.
                 </div>
               </>
             ) : null}
 
             {buyInStep === "review" && buyInDraft ? (
               <>
+                <p className="text-sm text-[var(--color-text-secondary)]">
+                  Step 2 help: verify these values before confirming.
+                </p>
                 <div className="grid gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-sm text-[var(--color-text-secondary)]">
                   <p>
                     Gross amount: <strong>{buyInDraft.amountInput} {portfolio.symbol}</strong>
@@ -1200,6 +1208,9 @@ export default function Home() {
 
             {buyInStep === "processing" ? (
               <div className="space-y-3 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-sm">
+                <p className="text-[var(--color-text-secondary)]">
+                  Step 3 help: please wait while both transactions are submitted.
+                </p>
                 <div className="flex items-center justify-between gap-3">
                   <span className="font-semibold text-[var(--color-text-primary)]">Approve transaction</span>
                   <span className="text-[var(--color-text-secondary)]">
@@ -1226,6 +1237,7 @@ export default function Home() {
             {buyInStep === "success" ? (
               <div className="space-y-2 rounded-[var(--radius-md)] border border-[var(--color-success-100)] bg-[var(--color-success-100)] px-3 py-3 text-sm text-[var(--color-success-700)]">
                 <p className="font-semibold">Buy-in flow completed successfully.</p>
+                <p className="text-xs">You can close this modal and review updated dashboard metrics.</p>
                 {buyInApproveTxHash ? <p className="break-all">Approve Tx: {buyInApproveTxHash}</p> : null}
                 {buyInTxHash ? <p className="break-all">BuyIn Tx: {buyInTxHash}</p> : null}
               </div>
@@ -1244,10 +1256,10 @@ export default function Home() {
           title="Claim Payout"
           subtitle={
             claimStep === "review"
-              ? "Review and confirm claim submission"
+              ? "Step 1 of 3: Review claim"
               : claimStep === "processing"
-                ? "Submitting claim transaction"
-                : "Claim submitted"
+                ? "Step 2 of 3: Submitting claim"
+                : "Step 3 of 3: Completed"
           }
           onClose={closeClaimModal}
           footer={
@@ -1291,24 +1303,24 @@ export default function Home() {
 
             {claimStep === "review" ? (
               <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white p-3 text-[var(--color-text-secondary)]">
-                <p className="font-semibold text-[var(--color-text-primary)]">Confirmation</p>
+                <p className="font-semibold text-[var(--color-text-primary)]">Step 1 help</p>
                 <p className="mt-1">
-                  You are about to call <strong>claimPayout</strong> and send matured payout to your
-                  current wallet address.
+                  Confirm the payout amount and destination address, then submit claimPayout.
                 </p>
               </div>
             ) : null}
 
             {claimStep === "processing" ? (
               <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-[var(--color-text-secondary)]">
-                <p className="font-semibold text-[var(--color-text-primary)]">Transaction in progress</p>
-                <p className="mt-1">Submitting claim and waiting for state sync.</p>
+                <p className="font-semibold text-[var(--color-text-primary)]">Step 2 help</p>
+                <p className="mt-1">Submitting claim transaction and syncing balances.</p>
               </div>
             ) : null}
 
             {claimTxHash ? (
               <div className="rounded-[var(--radius-md)] border border-[var(--color-success-100)] bg-[var(--color-success-100)] p-3 text-[var(--color-success-700)]">
                 <p className="font-semibold">Claim transaction submitted.</p>
+                <p className="text-xs">Step 3 complete. Close this modal to continue.</p>
                 <p className="mt-1 break-all text-xs">Tx: {claimTxHash}</p>
               </div>
             ) : null}

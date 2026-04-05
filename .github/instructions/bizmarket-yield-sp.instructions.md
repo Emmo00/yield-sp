@@ -3,6 +3,7 @@ name: bizmarket-loanvault-protocol
 description: Use this skill to integrate the BizMarket LoanVault protocol contracts, including architecture, lifecycle, payout mechanics, risks, and all externally exposed methods.
 ---
 
+
 # BizMarket LoanVault Protocol Explainer Skill
 
 ## Purpose
