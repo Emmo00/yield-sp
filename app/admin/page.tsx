@@ -14,7 +14,7 @@ import { formatDate } from "@/app/lib/format";
 import { queryToronetContractApi, writeToronetContractApi } from "@/app/lib/toronet-client";
 import { extractBigIntValue, extractTxHash } from "@/app/lib/toronet-common";
 import { getStoredSession, type ToronetSession } from "@/app/lib/session";
-import { formatUnits, toUnits } from "@/app/lib/units";
+import { formatBpsAsPercent, formatUnits, percentToBps, toUnits } from "@/app/lib/units";
 
 type AdminTab = "overview" | "funding" | "parameters" | "activity";
 type AdminActionKey = "depositYield" | "setBuyInFeePercentage" | "setYieldPercentage" | "setLockPeriod";
@@ -63,8 +63,8 @@ export default function AdminPage() {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [error, setError] = useState("");
 
-  const [feeBpsInput, setFeeBpsInput] = useState("125");
-  const [yieldBpsInput, setYieldBpsInput] = useState("900");
+  const [feePercentInput, setFeePercentInput] = useState("1.25");
+  const [yieldPercentInput, setYieldPercentInput] = useState("9");
   const [lockPeriodInput, setLockPeriodInput] = useState("");
   const [useCustomDepositAmount, setUseCustomDepositAmount] = useState(false);
   const [customDepositAmountInput, setCustomDepositAmountInput] = useState("");
@@ -103,6 +103,27 @@ export default function AdminPage() {
     }
 
     return `${seconds.toString()} sec`;
+  }, []);
+
+  const validatePercentToBps = useCallback((inputValue: string, label: string) => {
+    const normalized = inputValue.trim();
+    if (!normalized) {
+      setError(`${label} is required.`);
+      return null;
+    }
+
+    try {
+      const bpsValue = percentToBps(normalized);
+      if (BigInt(bpsValue) > BigInt(10000)) {
+        setError(`${label} cannot exceed 100%.`);
+        return null;
+      }
+
+      return bpsValue;
+    } catch {
+      setError(`${label} must be a valid percentage with up to 2 decimal places.`);
+      return null;
+    }
   }, []);
 
   const depositAmountPreview = useMemo(() => {
@@ -316,9 +337,8 @@ export default function AdminPage() {
       return false;
     }
 
-    const normalized = feeBpsInput.trim();
-    if (!/^\d+$/.test(normalized)) {
-      setError("Entry fee must be an integer basis points value.");
+    const bpsValue = validatePercentToBps(feePercentInput, "Entry fee");
+    if (!bpsValue) {
       return false;
     }
 
@@ -328,7 +348,7 @@ export default function AdminPage() {
         password: session.password,
         contract: "loan-vault",
         functionName: "setBuyInFeePercentage",
-        args: [normalized],
+        args: [bpsValue],
       }),
     );
   }
@@ -338,9 +358,8 @@ export default function AdminPage() {
       return false;
     }
 
-    const normalized = yieldBpsInput.trim();
-    if (!/^\d+$/.test(normalized)) {
-      setError("Yield percentage must be an integer basis points value.");
+    const bpsValue = validatePercentToBps(yieldPercentInput, "Yield percentage");
+    if (!bpsValue) {
       return false;
     }
 
@@ -350,7 +369,7 @@ export default function AdminPage() {
         password: session.password,
         contract: "loan-vault",
         functionName: "setYieldPercentage",
-        args: [normalized],
+        args: [bpsValue],
       }),
     );
   }
@@ -385,13 +404,11 @@ export default function AdminPage() {
       return;
     }
 
-    if (action === "setBuyInFeePercentage" && !/^\d+$/.test(feeBpsInput.trim())) {
-      setError("Entry fee must be an integer basis points value.");
+    if (action === "setBuyInFeePercentage" && !validatePercentToBps(feePercentInput, "Entry fee")) {
       return;
     }
 
-    if (action === "setYieldPercentage" && !/^\d+$/.test(yieldBpsInput.trim())) {
-      setError("Yield percentage must be an integer basis points value.");
+    if (action === "setYieldPercentage" && !validatePercentToBps(yieldPercentInput, "Yield percentage")) {
       return;
     }
 
@@ -435,8 +452,8 @@ export default function AdminPage() {
         subtitle: "This updates the protocol entry fee for future buy-ins.",
         confirmLabel: "Confirm Fee Update",
         items: [
-          { label: "Current", value: `${snapshot.buyInFeeBps.toString()} bps` },
-          { label: "New", value: `${feeBpsInput.trim()} bps` },
+          { label: "Current", value: formatBpsAsPercent(snapshot.buyInFeeBps) },
+          { label: "New", value: `${feePercentInput.trim()}%` },
         ],
       };
     }
@@ -447,8 +464,8 @@ export default function AdminPage() {
         subtitle: "This updates projected payout yield for future buy-ins.",
         confirmLabel: "Confirm Yield Update",
         items: [
-          { label: "Current", value: `${snapshot.yieldBps.toString()} bps` },
-          { label: "New", value: `${yieldBpsInput.trim()} bps` },
+          { label: "Current", value: formatBpsAsPercent(snapshot.yieldBps) },
+          { label: "New", value: `${yieldPercentInput.trim()}%` },
         ],
       };
     }
@@ -462,7 +479,7 @@ export default function AdminPage() {
         { label: "New", value: `${formatLockPeriod(BigInt(lockPeriodInput.trim()))} (${lockPeriodInput.trim()} sec)` },
       ],
     };
-  }, [confirmAction, depositAmountPreview.display, feeBpsInput, formatLockPeriod, formatToken, lockPeriodInput, snapshot.buyInFeeBps, snapshot.lockPeriodSeconds, snapshot.shortfall, snapshot.yieldBps, useCustomDepositAmount]);
+  }, [confirmAction, depositAmountPreview.display, feePercentInput, formatLockPeriod, formatToken, lockPeriodInput, snapshot.buyInFeeBps, snapshot.lockPeriodSeconds, snapshot.shortfall, snapshot.yieldBps, useCustomDepositAmount, yieldPercentInput]);
 
   async function executeConfirmedAction() {
     if (!confirmAction || confirmSubmitting) {
@@ -668,14 +685,15 @@ export default function AdminPage() {
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                 <div className="space-y-3">
                   <p className="text-sm text-[var(--color-text-secondary)]">
-                    Current buyInFeePercentage: {snapshot.buyInFeeBps.toString()} bps
+                    Current buyInFeePercentage: {formatBpsAsPercent(snapshot.buyInFeeBps)}
                   </p>
-                  <Field label="New buyInFeePercentage (bps)">
+                  <Field label="New buyInFeePercentage (%)" hint="Up to 2 decimal places.">
                     <input
-                      value={feeBpsInput}
-                      onChange={(event) => setFeeBpsInput(event.target.value)}
+                      value={feePercentInput}
+                      onChange={(event) => setFeePercentInput(event.target.value)}
                       className="h-12 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white px-3 text-sm outline-none"
-                      inputMode="numeric"
+                      inputMode="decimal"
+                      placeholder="1.25"
                     />
                   </Field>
                   <Button
@@ -693,14 +711,15 @@ export default function AdminPage() {
 
                 <div className="space-y-3">
                   <p className="text-sm text-[var(--color-text-secondary)]">
-                    Current yieldPercentage: {snapshot.yieldBps.toString()} bps
+                    Current yieldPercentage: {formatBpsAsPercent(snapshot.yieldBps)}
                   </p>
-                  <Field label="New yieldPercentage (bps)">
+                  <Field label="New yieldPercentage (%)" hint="Up to 2 decimal places.">
                     <input
-                      value={yieldBpsInput}
-                      onChange={(event) => setYieldBpsInput(event.target.value)}
+                      value={yieldPercentInput}
+                      onChange={(event) => setYieldPercentInput(event.target.value)}
                       className="h-12 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white px-3 text-sm outline-none"
-                      inputMode="numeric"
+                      inputMode="decimal"
+                      placeholder="9"
                     />
                   </Field>
                   <Button

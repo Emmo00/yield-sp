@@ -319,6 +319,16 @@ export default function Home() {
     };
   }, [countdownNow, portfolio.positions]);
 
+  const hasReadyPosition = useMemo(
+    () => portfolio.positions.some((position) => position.maturityTime <= countdownNow),
+    [countdownNow, portfolio.positions],
+  );
+
+  const canStartClaimFlow = useMemo(
+    () => activeAction === null && (hasReadyPosition || portfolio.availablePayout > BigInt(0)),
+    [activeAction, hasReadyPosition, portfolio.availablePayout],
+  );
+
   const refreshPortfolio = useCallback(
     async (activeSession: ToronetSession) => {
       setPortfolioLoading(true);
@@ -1018,11 +1028,13 @@ export default function Home() {
                     <p>
                       Next payout countdown: <strong>{nextPayoutCountdown.value}</strong>
                     </p>
+                    {hasReadyPosition && portfolio.availablePayout <= BigInt(0) ? (
+                      <p className="rounded-[var(--radius-md)] border border-[var(--color-warning-100)] bg-[var(--color-warning-100)] px-3 py-2 text-xs text-[var(--color-warning-700)]">
+                        A position is mature, but claimable amount is zero. Vault funding may still be pending.
+                      </p>
+                    ) : null}
                     <Button
-                      disabled={
-                        activeAction !== null ||
-                        portfolio.availablePayout <= BigInt(0)
-                      }
+                      disabled={!canStartClaimFlow}
                       onClick={openClaimModal}
                     >
                       <HandCoins size={16} />
@@ -1040,7 +1052,9 @@ export default function Home() {
                 {portfolio.positions.length === 0 ? (
                   <p className="text-sm text-[var(--color-text-secondary)]">No positions found.</p>
                 ) : (
-                  portfolio.positions.map((position) => (
+                  portfolio.positions.map((position) => {
+                    const isReady = position.maturityTime <= countdownNow;
+                    return (
                     <article
                       key={position.id}
                       className="rounded-[var(--radius-md)] border border-[var(--color-border)] p-3"
@@ -1049,7 +1063,7 @@ export default function Home() {
                         <p className="text-sm font-semibold text-[var(--color-text-primary)]">
                           {position.id}
                         </p>
-                        {position.status === "ready" ? (
+                        {isReady ? (
                           <Badge tone="success">Ready</Badge>
                         ) : (
                           <Badge tone="neutral">Locked</Badge>
@@ -1066,7 +1080,8 @@ export default function Home() {
                         </span>
                       </div>
                     </article>
-                  ))
+                    );
+                  })
                 )}
               </div>
             </Card>
@@ -1350,7 +1365,7 @@ export default function Home() {
                 </Button>
                 <Button
                   className="flex-1"
-                  disabled={activeAction === "claimPayout" || portfolio.availablePayout <= BigInt(0)}
+                  disabled={activeAction === "claimPayout" || !canStartClaimFlow}
                   onClick={() => {
                     void executeClaimPayout();
                   }}

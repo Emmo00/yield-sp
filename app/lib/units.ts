@@ -47,3 +47,36 @@ export function formatUnits(
 
   return `${sign}${whole.toString()}.${normalizedFraction}`;
 }
+
+export function formatBpsAsPercent(value: string | number | bigint): string {
+  const asBigInt = typeof value === "bigint" ? value : BigInt(String(value));
+  const sign = asBigInt < BigInt(0) ? "-" : "";
+  const absolute = asBigInt < BigInt(0) ? -asBigInt : asBigInt;
+
+  const whole = absolute / BigInt(100);
+  const fraction = absolute % BigInt(100);
+  const normalizedFraction = fraction.toString().padStart(2, "0").replace(/0+$/, "");
+
+  if (!normalizedFraction) {
+    return `${sign}${whole.toString()}%`;
+  }
+
+  return `${sign}${whole.toString()}.${normalizedFraction}%`;
+}
+
+export function percentToBps(percent: string): string {
+  const trimmed = percent.trim();
+  if (!trimmed) {
+    throw new Error("Percentage is required.");
+  }
+
+  if (!/^\d+(\.\d{1,2})?$/.test(trimmed)) {
+    throw new Error("Percentage must have up to 2 decimal places.");
+  }
+
+  const [wholePart, fractionalPart = ""] = trimmed.split(".");
+  const normalizedFraction = fractionalPart.padEnd(2, "0");
+  const bpsValue = BigInt(wholePart || "0") * BigInt(100) + BigInt(normalizedFraction || "0");
+
+  return bpsValue.toString();
+}
