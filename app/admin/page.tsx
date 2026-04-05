@@ -14,7 +14,7 @@ import { formatDate } from "@/app/lib/format";
 import { queryToronetContractApi, writeToronetContractApi } from "@/app/lib/toronet-client";
 import { extractBigIntValue, extractTxHash } from "@/app/lib/toronet-common";
 import { getStoredSession, type ToronetSession } from "@/app/lib/session";
-import { formatUnits } from "@/app/lib/units";
+import { formatUnits, toUnits } from "@/app/lib/units";
 
 type AdminTab = "overview" | "funding" | "parameters" | "activity";
 
@@ -24,6 +24,7 @@ interface AdminSnapshot {
   shortfall: bigint;
   totalLiability: bigint;
   vaultBalance: bigint;
+  lockPeriodSeconds: bigint;
   buyInFeeBps: bigint;
   yieldBps: bigint;
 }
@@ -43,6 +44,7 @@ const INITIAL_SNAPSHOT: AdminSnapshot = {
   shortfall: BigInt(0),
   totalLiability: BigInt(0),
   vaultBalance: BigInt(0),
+  lockPeriodSeconds: BigInt(0),
   buyInFeeBps: BigInt(0),
   yieldBps: BigInt(0),
 };
@@ -62,6 +64,9 @@ export default function AdminPage() {
 
   const [feeBpsInput, setFeeBpsInput] = useState("125");
   const [yieldBpsInput, setYieldBpsInput] = useState("900");
+  const [lockPeriodInput, setLockPeriodInput] = useState("");
+  const [useCustomDepositAmount, setUseCustomDepositAmount] = useState(false);
+  const [customDepositAmountInput, setCustomDepositAmountInput] = useState("");
 
   const [activity, setActivity] = useState<AdminActivity[]>([]);
 
@@ -84,13 +89,73 @@ export default function AdminPage() {
     [snapshot.decimals, snapshot.symbol],
   );
 
+  const formatLockPeriod = useCallback((seconds: bigint) => {
+    const days = Number(seconds) / 86400;
+    if (!Number.isFinite(days)) {
+      return `${seconds.toString()} sec`;
+    }
+
+    if (days >= 1) {
+      return `${Number.isInteger(days) ? days.toFixed(0) : days.toFixed(2)} days`;
+    }
+
+    return `${seconds.toString()} sec`;
+  }, []);
+
+  const depositAmountPreview = useMemo(() => {
+    if (!useCustomDepositAmount) {
+      return {
+        valid: true,
+        units: snapshot.shortfall,
+        display: formatToken(snapshot.shortfall),
+        error: "",
+      };
+    }
+
+    const normalized = customDepositAmountInput.trim();
+    if (!normalized) {
+      return {
+        valid: false,
+        units: BigInt(0),
+        display: "",
+        error: "Enter a custom amount.",
+      };
+    }
+
+    try {
+      const units = BigInt(toUnits(normalized, snapshot.decimals));
+      if (units < BigInt(0)) {
+        return {
+          valid: false,
+          units: BigInt(0),
+          display: "",
+          error: "Amount cannot be negative.",
+        };
+      }
+
+      return {
+        valid: true,
+        units,
+        display: `${normalized} ${snapshot.symbol}`,
+        error: "",
+      };
+    } catch {
+      return {
+        valid: false,
+        units: BigInt(0),
+        display: "",
+        error: "Enter a valid positive amount.",
+      };
+    }
+  }, [customDepositAmountInput, formatToken, snapshot.decimals, snapshot.shortfall, snapshot.symbol, useCustomDepositAmount]);
+
   const refreshSnapshot = useCallback(
     async (activeSession: ToronetSession) => {
       setLoadingSnapshot(true);
       setError("");
 
       try {
-        const [decimalsRaw, symbolRaw, shortfallRaw, liabilityRaw, vaultBalanceRaw, feeRaw, yieldRaw] =
+        const [decimalsRaw, symbolRaw, shortfallRaw, liabilityRaw, vaultBalanceRaw, lockPeriodRaw, feeRaw, yieldRaw] =
           await Promise.all([
             queryToronetContractApi({
               address: activeSession.address,
@@ -127,6 +192,12 @@ export default function AdminPage() {
               address: activeSession.address,
               password: activeSession.password,
               contract: "loan-vault",
+              functionName: "LOCK_PERIOD",
+            }),
+            queryToronetContractApi({
+              address: activeSession.address,
+              password: activeSession.password,
+              contract: "loan-vault",
               functionName: "buyInFeePercentage",
             }),
             queryToronetContractApi({
@@ -158,6 +229,7 @@ export default function AdminPage() {
           shortfall: extractBigIntValue(shortfallRaw) ?? BigInt(0),
           totalLiability: extractBigIntValue(liabilityRaw) ?? BigInt(0),
           vaultBalance: extractBigIntValue(vaultBalanceRaw) ?? BigInt(0),
+          lockPeriodSeconds: extractBigIntValue(lockPeriodRaw) ?? BigInt(0),
           buyInFeeBps: extractBigIntValue(feeRaw) ?? BigInt(0),
           yieldBps: extractBigIntValue(yieldRaw) ?? BigInt(0),
         });
@@ -183,6 +255,12 @@ export default function AdminPage() {
 
     void refreshSnapshot(session);
   }, [session, refreshSnapshot]);
+
+  useEffect(() => {
+    if (!lockPeriodInput && snapshot.lockPeriodSeconds > BigInt(0)) {
+      setLockPeriodInput(snapshot.lockPeriodSeconds.toString());
+    }
+  }, [lockPeriodInput, snapshot.lockPeriodSeconds]);
 
   async function runAction(label: string, operation: () => Promise<unknown>) {
     if (!session) {
@@ -210,12 +288,20 @@ export default function AdminPage() {
       return;
     }
 
+    if (!depositAmountPreview.valid) {
+      setError(depositAmountPreview.error || "Invalid deposit amount.");
+      return;
+    }
+
+    const amountArg = depositAmountPreview.units.toString();
+
     await runAction("depositYield", () =>
       writeToronetContractApi({
         address: session.address,
         password: session.password,
         contract: "loan-vault",
         functionName: "depositYield",
+        args: [amountArg],
       }),
     );
   }
@@ -259,6 +345,28 @@ export default function AdminPage() {
         password: session.password,
         contract: "loan-vault",
         functionName: "setYieldPercentage",
+        args: [normalized],
+      }),
+    );
+  }
+
+  async function setLockPeriod() {
+    if (!session) {
+      return;
+    }
+
+    const normalized = lockPeriodInput.trim();
+    if (!/^\d+$/.test(normalized)) {
+      setError("LOCK_PERIOD must be an integer number of seconds.");
+      return;
+    }
+
+    await runAction("setLockPeriod", () =>
+      writeToronetContractApi({
+        address: session.address,
+        password: session.password,
+        contract: "loan-vault",
+        functionName: "setLockPeriod",
         args: [normalized],
       }),
     );
@@ -343,10 +451,15 @@ export default function AdminPage() {
         <div className="mt-4 grid gap-4">
           {tab === "overview" ? (
             <>
-              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
                 <MetricCard label="Shortfall" value={formatToken(snapshot.shortfall)} />
                 <MetricCard label="Vault Balance" value={formatToken(snapshot.vaultBalance)} />
                 <MetricCard label="Total Liability" value={formatToken(snapshot.totalLiability)} />
+                <MetricCard
+                  label="LOCK_PERIOD"
+                  value={formatLockPeriod(snapshot.lockPeriodSeconds)}
+                  note={`${snapshot.lockPeriodSeconds.toString()} sec`}
+                />
                 <MetricCard
                   label="Funding Status"
                   value={
@@ -358,21 +471,52 @@ export default function AdminPage() {
                 />
               </div>
 
-              <Card title="Vault Funding" subtitle="Call depositYield when shortfall is above zero.">
+              <Card title="Vault Funding" subtitle="Default submits current shortfall. Enable custom amount to override.">
                 <div className="space-y-3">
                   <p className="text-sm text-[var(--color-text-secondary)]">
                     Current shortfall: {formatToken(snapshot.shortfall)}
                   </p>
+
+                  <label className="flex items-center gap-2 text-sm text-[var(--color-text-secondary)]">
+                    <input
+                      type="checkbox"
+                      checked={useCustomDepositAmount}
+                      onChange={(event) => setUseCustomDepositAmount(event.target.checked)}
+                    />
+                    Edit amount to deposit
+                  </label>
+
+                  {useCustomDepositAmount ? (
+                    <Field label={`Custom deposit amount (${snapshot.symbol})`} hint="Enter a token amount, not base units.">
+                      <input
+                        value={customDepositAmountInput}
+                        onChange={(event) => setCustomDepositAmountInput(event.target.value)}
+                        className="h-12 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white px-3 text-sm outline-none"
+                        inputMode="decimal"
+                        placeholder="1000"
+                      />
+                    </Field>
+                  ) : null}
+
+                  <p className="text-sm text-[var(--color-text-secondary)]">
+                    Amount to submit: <strong>{depositAmountPreview.display || "-"}</strong>
+                  </p>
+                  {depositAmountPreview.error ? (
+                    <p className="text-xs text-[var(--color-error-700)]">{depositAmountPreview.error}</p>
+                  ) : null}
+
                   <Button
                     disabled={
-                      actionLoading !== null || snapshot.shortfall <= BigInt(0)
+                      actionLoading !== null ||
+                      (!useCustomDepositAmount && snapshot.shortfall <= BigInt(0)) ||
+                      (useCustomDepositAmount && !depositAmountPreview.valid)
                     }
                     onClick={() => {
                       void depositYield();
                     }}
                   >
                     <Wallet size={16} />
-                    {actionLoading === "depositYield" ? "Submitting..." : "depositYield"}
+                    {actionLoading === "depositYield" ? "Submitting..." : "Deposit Yield"}
                   </Button>
                 </div>
               </Card>
@@ -394,13 +538,16 @@ export default function AdminPage() {
                 <p>
                   <strong>Total liability:</strong> {formatToken(snapshot.totalLiability)}
                 </p>
+                <p>
+                  <strong>LOCK_PERIOD:</strong> {formatLockPeriod(snapshot.lockPeriodSeconds)} ({snapshot.lockPeriodSeconds.toString()} sec)
+                </p>
               </div>
             </Card>
           ) : null}
 
           {tab === "parameters" ? (
-            <Card title="Protocol Parameters" subtitle="Update buy-in fee and yield percentages in basis points.">
-              <div className="grid gap-4 md:grid-cols-2">
+            <Card title="Protocol Parameters" subtitle="Update fee, yield, and lock period.">
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                 <div className="space-y-3">
                   <p className="text-sm text-[var(--color-text-secondary)]">
                     Current buyInFeePercentage: {snapshot.buyInFeeBps.toString()} bps
@@ -446,6 +593,29 @@ export default function AdminPage() {
                   >
                     <Settings2 size={16} />
                     {actionLoading === "setYieldPercentage" ? "Submitting..." : "setYieldPercentage"}
+                  </Button>
+                </div>
+
+                <div className="space-y-3">
+                  <p className="text-sm text-[var(--color-text-secondary)]">
+                    Current LOCK_PERIOD: {formatLockPeriod(snapshot.lockPeriodSeconds)}
+                  </p>
+                  <Field label="New LOCK_PERIOD (seconds)" hint="Example: 7776000 = 90 days">
+                    <input
+                      value={lockPeriodInput}
+                      onChange={(event) => setLockPeriodInput(event.target.value)}
+                      className="h-12 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white px-3 text-sm outline-none"
+                      inputMode="numeric"
+                    />
+                  </Field>
+                  <Button
+                    disabled={actionLoading !== null}
+                    onClick={() => {
+                      void setLockPeriod();
+                    }}
+                  >
+                    <Settings2 size={16} />
+                    {actionLoading === "setLockPeriod" ? "Submitting..." : "setLockPeriod"}
                   </Button>
                 </div>
               </div>

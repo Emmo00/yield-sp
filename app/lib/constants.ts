@@ -27,7 +27,7 @@ export const CONTRACT_ADDRESSES = {
         stablecoin: "0xabcdef1234567890abcdef1234567890abcdef12",
     },
     testnet: {
-        "loan-vault": "0xa2DA708e0424E60A417f95a6d472aeB2733111AE",
+        "loan-vault": "0xD19506397bFC56B0064fd967892ee6C44f8afA7b",
         stablecoin: "0xa07925A08bF15335a373bf2DdB1b2a26F1B13a20",
     },
 } as const;

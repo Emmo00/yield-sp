@@ -51,7 +51,13 @@
     "outputs": [{ "name": "", "type": "uint256", "internalType": "uint256" }],
     "stateMutability": "nonpayable"
   },
-  { "type": "function", "name": "depositYield", "inputs": [], "outputs": [], "stateMutability": "nonpayable" },
+  {
+    "type": "function",
+    "name": "depositYield",
+    "inputs": [{ "name": "amount", "type": "uint256", "internalType": "uint256" }],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
   { "type": "function", "name": "destroy", "inputs": [], "outputs": [], "stateMutability": "nonpayable" },
   {
     "type": "function",
@@ -125,6 +131,13 @@
     "type": "function",
     "name": "setBuyInFeePercentage",
     "inputs": [{ "name": "_buyInFeePercentage", "type": "uint256", "internalType": "uint256" }],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setLockPeriod",
+    "inputs": [{ "name": "_lockPeriod", "type": "uint256", "internalType": "uint256" }],
     "outputs": [],
     "stateMutability": "nonpayable"
   },
@@ -204,6 +217,15 @@
       { "name": "stablecoin", "type": "address", "indexed": true, "internalType": "address" },
       { "name": "treasury", "type": "address", "indexed": true, "internalType": "address" },
       { "name": "loanManager", "type": "address", "indexed": true, "internalType": "address" }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "LockPeriodUpdated",
+    "inputs": [
+      { "name": "previousValue", "type": "uint256", "indexed": false, "internalType": "uint256" },
+      { "name": "newValue", "type": "uint256", "indexed": false, "internalType": "uint256" }
     ],
     "anonymous": false
   },
