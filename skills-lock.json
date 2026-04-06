@@ -5,6 +5,26 @@
       "source": "anthropics/skills",
       "sourceType": "github",
       "computedHash": "516bd2154eb843a8240e43d5b285229129853114ad7075a5e141e1c08e408c84"
+    },
+    "toronet-app-integrations": {
+      "source": "emmo00/toronet-agent-skills",
+      "sourceType": "github",
+      "computedHash": "4031811ab24c953b0a0ad0ff71e7cefaf1ef42eaf8acb3f2428457571263e5c3"
+    },
+    "toronet-sdk": {
+      "source": "emmo00/toronet-agent-skills",
+      "sourceType": "github",
+      "computedHash": "ccc9d6f33ed63fb838bc07af36c73cdc0b2edef62381d829bc744f1f7069ecce"
+    },
+    "toronet-smart-contract-deployment": {
+      "source": "emmo00/toronet-agent-skills",
+      "sourceType": "github",
+      "computedHash": "86bc1e13e766d7cfb633a9d23d5674e631aec78bb2602d87a28419c1a802050a"
+    },
+    "toronet-smart-contract-development": {
+      "source": "emmo00/toronet-agent-skills",
+      "sourceType": "github",
+      "computedHash": "b87da3a298fff70f443f0824d38c22d77f897b9c0293defb39a7b99757616892"
     }
   }
 }
