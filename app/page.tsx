@@ -634,7 +634,10 @@ export default function Home() {
       }
 
       const normalizedEntries = Object.entries(parsed as Record<string, unknown>)
-        .filter(([key, value]) => key.trim().length > 0 && typeof value === "string")
+        .filter((entry): entry is [string, string] => {
+          const [key, value] = entry;
+          return key.trim().length > 0 && typeof value === "string";
+        })
         .map(([key, value]) => [key, value.trim()] as const)
         .filter(([, value]) => value.length > 0);
 
