@@ -36,6 +36,7 @@ import {
   loginWithToronet,
   logActivityEventApi,
   queryToronetContractApi,
+  submitSignupEmailApi,
   signupWithToronet,
   writeToronetContractApi,
 } from "@/app/lib/toronet-client";
@@ -62,6 +63,7 @@ type ClaimFlowStep = "review" | "processing" | "success";
 
 interface PositionRecord {
   id: string;
+  key: string;
   principal: bigint;
   payoutAmount: bigint;
   startTime: bigint;
@@ -160,6 +162,10 @@ function formatCountdownDHMS(totalSeconds: bigint): string {
   return `${days.toString()}:${pad2(hours)}:${pad2(minutes)}:${pad2(seconds)}`;
 }
 
+function buildPositionKey(principal: bigint, startTime: bigint, payoutAmount: bigint): string {
+  return `${startTime.toString()}-${principal.toString()}-${payoutAmount.toString()}`;
+}
+
 function parsePositions(value: unknown, lockPeriodSeconds: bigint): PositionRecord[] {
   const extracted = extractResultValue(value);
   let candidates: unknown[] = [];
@@ -195,6 +201,7 @@ function parsePositions(value: unknown, lockPeriodSeconds: bigint): PositionReco
 
         return {
           id: `POS-${index + 1}`,
+          key: buildPositionKey(principal, startTime, payoutAmount),
           principal,
           payoutAmount,
           startTime,
@@ -215,6 +222,7 @@ function parsePositions(value: unknown, lockPeriodSeconds: bigint): PositionReco
 
       return {
         id: `POS-${index + 1}`,
+        key: buildPositionKey(principal, startTime, payoutAmount),
         principal,
         payoutAmount,
         startTime,
@@ -227,6 +235,7 @@ function parsePositions(value: unknown, lockPeriodSeconds: bigint): PositionReco
 
 export default function Home() {
   const network = useMemo<NetworkEnv>(() => getConfiguredNetwork(), []);
+  const isTestnet = network === "testnet";
   const vaultAddress = useMemo(() => getContractAddress("loan-vault", network), [network]);
   const stablecoinAddress = useMemo(
     () => getContractAddress("stablecoin", network),
@@ -241,6 +250,7 @@ export default function Home() {
   const [authMode, setAuthMode] = useState<AuthMode>("login");
   const [identifier, setIdentifier] = useState("");
   const [username, setUsername] = useState("");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [authError, setAuthError] = useState("");
@@ -270,6 +280,16 @@ export default function Home() {
   const [activeAction, setActiveAction] = useState<string | null>(null);
 
   const [activity, setActivity] = useState<ActivityRecord[]>([]);
+  const [positionNames, setPositionNames] = useState<Record<string, string>>({});
+  const [positionNamesLoaded, setPositionNamesLoaded] = useState(false);
+
+  const positionNamesStorageKey = useMemo(
+    () =>
+      session
+        ? `toronet.position-names.v1.${network}.${session.address.toLowerCase()}`
+        : "",
+    [network, session],
+  );
 
   const addActivity = useCallback(
     (title: string, detail: string, status: ActivityStatus, response?: unknown) => {
@@ -586,6 +606,72 @@ export default function Home() {
   }, [session, refreshActivityHistory, refreshPortfolio]);
 
   useEffect(() => {
+    if (!session || typeof window === "undefined" || !positionNamesStorageKey) {
+      setPositionNames({});
+      setPositionNamesLoaded(false);
+      return;
+    }
+
+    const serialized = window.localStorage.getItem(positionNamesStorageKey);
+    if (!serialized) {
+      setPositionNames({});
+      setPositionNamesLoaded(true);
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(serialized) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        setPositionNames({});
+        setPositionNamesLoaded(true);
+        return;
+      }
+
+      const normalizedEntries = Object.entries(parsed as Record<string, unknown>)
+        .filter(([key, value]) => key.trim().length > 0 && typeof value === "string")
+        .map(([key, value]) => [key, value.trim()] as const)
+        .filter(([, value]) => value.length > 0);
+
+      setPositionNames(Object.fromEntries(normalizedEntries));
+    } catch {
+      setPositionNames({});
+    } finally {
+      setPositionNamesLoaded(true);
+    }
+  }, [positionNamesStorageKey, session]);
+
+  useEffect(() => {
+    if (!session || !positionNamesLoaded || typeof window === "undefined" || !positionNamesStorageKey) {
+      return;
+    }
+
+    window.localStorage.setItem(positionNamesStorageKey, JSON.stringify(positionNames));
+  }, [positionNames, positionNamesLoaded, positionNamesStorageKey, session]);
+
+  function updatePositionName(positionKey: string, nextName: string) {
+    setPositionNames((previous) => {
+      const normalized = nextName.trim();
+      if (!normalized) {
+        if (!(positionKey in previous)) {
+          return previous;
+        }
+
+        const { [positionKey]: _removed, ...rest } = previous;
+        return rest;
+      }
+
+      if (previous[positionKey] === normalized) {
+        return previous;
+      }
+
+      return {
+        ...previous,
+        [positionKey]: normalized,
+      };
+    });
+  }
+
+  useEffect(() => {
     let cancelled = false;
 
     async function resolveUsername() {
@@ -654,6 +740,13 @@ export default function Home() {
     setAuthLoading(true);
 
     try {
+      const normalizedEmail = email.trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+        throw new Error("Enter a valid email address.");
+      }
+
+      await submitSignupEmailApi(normalizedEmail);
+
       const response = await signupWithToronet(username, password);
       const newSession: ToronetSession = {
         identifier: username,
@@ -667,6 +760,7 @@ export default function Home() {
       setSession(newSession);
       setPassword("");
       setUsername("");
+      setEmail("");
     } catch (error) {
       setAuthError(error instanceof Error ? error.message : "Sign-up failed.");
     } finally {
@@ -686,6 +780,8 @@ export default function Home() {
     setDisplayUsername("");
     setCopiedAddress(false);
     setPortfolio(INITIAL_PORTFOLIO);
+    setPositionNames({});
+    setPositionNamesLoaded(false);
     setActivity([]);
     setTab("home");
   }
@@ -1021,7 +1117,7 @@ export default function Home() {
             <p className="mt-3 text-sm text-[var(--color-text-secondary)]">
               {authMode === "login"
                 ? "Step 1: Enter your username or address and password."
-                : "Step 1: Choose a username and password to create a wallet."}
+                : "Step 1: Enter email, username, and password to create a wallet."}
             </p>
           </div>
 
@@ -1036,14 +1132,26 @@ export default function Home() {
                 />
               </Field>
             ) : (
-              <Field label="Username">
-                <input
-                  value={username}
-                  onChange={(event) => setUsername(event.target.value)}
-                  className="h-12 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white px-3 text-sm outline-none"
-                  placeholder="Choose a username"
-                />
-              </Field>
+              <>
+                <Field label="Email">
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
+                    className="h-12 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white px-3 text-sm outline-none"
+                    placeholder="you@example.com"
+                    autoComplete="email"
+                  />
+                </Field>
+                <Field label="Username">
+                  <input
+                    value={username}
+                    onChange={(event) => setUsername(event.target.value)}
+                    className="h-12 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white px-3 text-sm outline-none"
+                    placeholder="Choose a username"
+                  />
+                </Field>
+              </>
             )}
 
             <Field label="Password">
@@ -1114,6 +1222,15 @@ export default function Home() {
               {copiedAddress ? <Check size={16} /> : <Copy size={16} />}
               <span className="ml-2">{shortAddress(session.address)}</span>
             </button>
+            {isTestnet ? (
+              <Link
+                href="/mint"
+                className="inline-flex h-12 items-center rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-4 text-sm font-semibold text-[var(--color-text-primary)]"
+              >
+                <Coins size={16} />
+                <span className="ml-2">Mint</span>
+              </Link>
+            ) : null}
             <Button
               variant="secondary"
               onClick={() => {
@@ -1181,7 +1298,7 @@ export default function Home() {
                         Yield: <strong>{formatBpsAsPercent(portfolio.yieldBps)}</strong>
                       </span>
                       <span>
-                        Symbol: <strong>{portfolio.symbol}</strong>
+                        Currency: <strong>{portfolio.symbol}</strong>
                       </span>
                     </div>
                     <Button
@@ -1190,7 +1307,7 @@ export default function Home() {
                       onClick={openBuyInModal}
                     >
                       <Coins size={16} />
-                      Start Buy-In Flow
+                      Earn Interest
                       <ArrowRight size={16} />
                     </Button>
                   </div>
@@ -1230,14 +1347,15 @@ export default function Home() {
                 ) : (
                   portfolio.positions.map((position) => {
                     const isReady = position.maturityTime <= countdownNow;
+                    const positionName = positionNames[position.key] ?? "";
                     return (
                     <article
-                      key={position.id}
+                      key={position.key}
                       className="rounded-[var(--radius-md)] border border-[var(--color-border)] p-3"
                     >
                       <div className="flex items-center justify-between gap-3">
                         <p className="text-sm font-semibold text-[var(--color-text-primary)]">
-                          {position.id}
+                          {positionName || position.id}
                         </p>
                         {isReady ? (
                           <Badge tone="success">Ready</Badge>
@@ -1245,7 +1363,20 @@ export default function Home() {
                           <Badge tone="neutral">Locked</Badge>
                         )}
                       </div>
+                      <div className="mt-2">
+                        <label className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-tertiary)]">
+                          Position Name
+                        </label>
+                        <input
+                          value={positionName}
+                          onChange={(event) => updatePositionName(position.key, event.target.value)}
+                          className="mt-1 h-10 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white px-3 text-sm outline-none"
+                          placeholder={`Name ${position.id}`}
+                          maxLength={48}
+                        />
+                      </div>
                       <div className="mt-2 grid gap-2 text-sm text-[var(--color-text-secondary)] sm:grid-cols-2">
+                        <span>Position ID: {position.id}</span>
                         <span>Principal: {formatToken(position.principal)}</span>
                         <span>Payout: {formatToken(position.payoutAmount)}</span>
                         <span>
