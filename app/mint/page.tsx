@@ -1,6 +1,6 @@
 "use client";
 
-import { Coins, RefreshCcw } from "lucide-react";
+import { ArrowLeft, Coins, RefreshCcw } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -162,7 +162,8 @@ export default function MintPage() {
             href="/"
             className="mt-5 inline-flex h-12 items-center rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-4 text-sm font-semibold text-[var(--color-text-primary)]"
           >
-            Go to Dashboard
+            <ArrowLeft size={16} />
+            <span className="ml-2">Back to App</span>
           </Link>
         </section>
       </main>
@@ -187,7 +188,8 @@ export default function MintPage() {
               href="/"
               className="inline-flex h-12 items-center rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-4 text-sm font-semibold text-[var(--color-text-primary)]"
             >
-              Dashboard
+              <ArrowLeft size={16} />
+              <span className="ml-2">Back to App</span>
             </Link>
             <Button
               variant="secondary"

@@ -12,6 +12,7 @@ import {
   Landmark,
   LoaderCircle,
   LogOut,
+  MessageSquare,
   RefreshCcw,
   UserCircle2,
 } from "lucide-react";
@@ -36,6 +37,7 @@ import {
   loginWithToronet,
   logActivityEventApi,
   queryToronetContractApi,
+  submitFeedbackApi,
   submitSignupEmailApi,
   signupWithToronet,
   writeToronetContractApi,
@@ -55,7 +57,7 @@ import {
 import { formatBpsAsPercent, formatUnits, toUnits } from "@/app/lib/units";
 
 type AuthMode = "login" | "signup";
-type UserTab = "home" | "positions" | "activity" | "profile" | "faq";
+type UserTab = "home" | "positions" | "activity" | "profile" | "faq" | "feedback";
 type ActivityStatus = "completed" | "pending" | "failed";
 type BuyInFlowStep = "amount" | "review" | "processing" | "success";
 type BuyInProgress = "idle" | "approving" | "buying";
@@ -121,7 +123,7 @@ const FAQ_ITEMS = [
       "Use your Toronet username or address and password. Your session is stored in this browser so you can continue without signing in again each action.",
   },
   {
-    question: "What happens during the Buy-In flow?",
+    question: "What happens during the Buy-In?",
     answer:
       "You enter an amount, review details, and confirm once. The app then runs approve and buyIn automatically and shows progress in the modal.",
   },
@@ -280,6 +282,10 @@ export default function Home() {
   const [activeAction, setActiveAction] = useState<string | null>(null);
 
   const [activity, setActivity] = useState<ActivityRecord[]>([]);
+  const [feedbackMessage, setFeedbackMessage] = useState("");
+  const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
+  const [feedbackError, setFeedbackError] = useState("");
+  const [feedbackSuccess, setFeedbackSuccess] = useState("");
   const [positionNames, setPositionNames] = useState<Record<string, string>>({});
   const [positionNamesLoaded, setPositionNamesLoaded] = useState(false);
 
@@ -768,6 +774,42 @@ export default function Home() {
     }
   }
 
+  async function submitFeedback() {
+    if (!session) {
+      return;
+    }
+
+    const normalizedMessage = feedbackMessage.trim();
+    if (!normalizedMessage) {
+      setFeedbackError("Please enter your feedback before submitting.");
+      setFeedbackSuccess("");
+      return;
+    }
+
+    setFeedbackSubmitting(true);
+    setFeedbackError("");
+    setFeedbackSuccess("");
+
+    try {
+      const fallbackUsername =
+        session.username?.trim() ||
+        (session.identifier.trim() && !isHexAddress(session.identifier) ? session.identifier.trim() : "");
+
+      await submitFeedbackApi({
+        message: normalizedMessage,
+        userAddress: session.address,
+        username: displayUsername || fallbackUsername || undefined,
+      });
+
+      setFeedbackMessage("");
+      setFeedbackSuccess("Thanks! Your feedback has been sent to our admin team.");
+    } catch (error) {
+      setFeedbackError(error instanceof Error ? error.message : "Could not submit feedback.");
+    } finally {
+      setFeedbackSubmitting(false);
+    }
+  }
+
   function logout() {
     clearStoredSession();
     setSession(null);
@@ -783,6 +825,10 @@ export default function Home() {
     setPositionNames({});
     setPositionNamesLoaded(false);
     setActivity([]);
+    setFeedbackMessage("");
+    setFeedbackSubmitting(false);
+    setFeedbackError("");
+    setFeedbackSuccess("");
     setTab("home");
   }
 
@@ -971,11 +1017,11 @@ export default function Home() {
       setBuyInStep("success");
       setBuyInProgress("idle");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Buy-in flow failed.";
+      const message = error instanceof Error ? error.message : "Buy-in failed.";
       setBuyInProgress("idle");
       setBuyInStep("review");
       setBuyInFlowError(message);
-      addActivity("Buy-in flow", message, "failed");
+      addActivity("Buy-in", message, "failed");
       void persistActivity(session, {
         action: "buyInFailed",
         status: "failed",
@@ -1255,6 +1301,7 @@ export default function Home() {
             { value: "activity", label: "Activity" },
             { value: "profile", label: "Profile" },
             { value: "faq", label: "FAQ" },
+            { value: "feedback", label: "Feedback" },
           ]}
         />
 
@@ -1285,10 +1332,10 @@ export default function Home() {
               </div>
 
               <div className="grid gap-4 md:grid-cols-2">
-                <Card title="Buy In" subtitle="Guided 3-step flow">
+                <Card title="Buy In" subtitle="3-step">
                   <div className="space-y-4">
                     <p className="text-sm text-[var(--color-text-secondary)]">
-                      Enter amount, review totals, then confirm once to submit approve and buyIn.
+                      Enter amount, review totals, then confirm once to submit approve.
                     </p>
                     <div className="grid gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-sm text-[var(--color-text-secondary)] sm:grid-cols-3">
                       <span>
@@ -1331,10 +1378,20 @@ export default function Home() {
                       onClick={openClaimModal}
                     >
                       <HandCoins size={16} />
-                      {activeAction === "claimPayout" ? "Claiming..." : "Start Claim Flow"}
+                      {activeAction === "claimPayout" ? "Claiming..." : "Start Claim"}
                     </Button>
                   </div>
                 </Card>
+              </div>
+
+              <div className="pt-1 text-center">
+                <button
+                  type="button"
+                  onClick={() => setTab("feedback")}
+                  className="text-xs text-[var(--color-text-tertiary)] underline-offset-2 hover:underline"
+                >
+                  Have feedback? Share it with us.
+                </button>
               </div>
             </>
           ) : null}
@@ -1482,11 +1539,57 @@ export default function Home() {
               </div>
             </Card>
           ) : null}
+
+          {tab === "feedback" ? (
+            <Card title="Feedback" subtitle="Tell us what is confusing, broken, or missing.">
+              <div className="space-y-4">
+                <Field
+                  label="Your feedback"
+                  hint="Include what happened, where it happened, and what you expected."
+                >
+                  <textarea
+                    value={feedbackMessage}
+                    onChange={(event) => setFeedbackMessage(event.target.value)}
+                    className="min-h-32 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white px-3 py-3 text-sm outline-none"
+                    placeholder="Example: Buy-in review step should show expected maturity date before confirmation."
+                    maxLength={1500}
+                  />
+                </Field>
+
+                {feedbackError ? (
+                  <p className="rounded-[var(--radius-md)] border border-[var(--color-error-100)] bg-[var(--color-error-100)] px-3 py-2 text-sm text-[var(--color-error-700)]">
+                    {feedbackError}
+                  </p>
+                ) : null}
+
+                {feedbackSuccess ? (
+                  <p className="rounded-[var(--radius-md)] border border-[var(--color-success-100)] bg-[var(--color-success-100)] px-3 py-2 text-sm text-[var(--color-success-700)]">
+                    {feedbackSuccess}
+                  </p>
+                ) : null}
+
+                <div className="flex flex-wrap items-center gap-3">
+                  <Button
+                    disabled={feedbackSubmitting}
+                    onClick={() => {
+                      void submitFeedback();
+                    }}
+                  >
+                    <MessageSquare size={16} />
+                    {feedbackSubmitting ? "Sending..." : "Send Feedback"}
+                  </Button>
+                  <p className="text-xs text-[var(--color-text-tertiary)]">
+                    Sent from: {shortAddress(session.address)}
+                  </p>
+                </div>
+              </div>
+            </Card>
+          ) : null}
         </div>
 
         <Modal
           isOpen={buyInModalOpen}
-          title="Buy In Flow"
+          title="Buy In"
           subtitle={
             buyInStep === "amount"
               ? "Step 1 of 3: Enter amount"
@@ -1647,7 +1750,7 @@ export default function Home() {
 
             {buyInStep === "success" ? (
               <div className="space-y-2 rounded-[var(--radius-md)] border border-[var(--color-success-100)] bg-[var(--color-success-100)] px-3 py-3 text-sm text-[var(--color-success-700)]">
-                <p className="font-semibold">Buy-in flow completed successfully.</p>
+                <p className="font-semibold">Buy-in completed successfully.</p>
                 <p className="text-xs">You can close this modal and review updated dashboard metrics.</p>
                 {buyInApproveTxHash ? <p className="break-all">Approve Tx: {buyInApproveTxHash}</p> : null}
                 {buyInTxHash ? <p className="break-all">BuyIn Tx: {buyInTxHash}</p> : null}
@@ -1694,7 +1797,7 @@ export default function Home() {
               <p className="mt-2 break-all font-mono text-sm text-[var(--color-text-primary)]">{session.address}</p>
             </div>
             <p className="text-xs text-[var(--color-text-tertiary)]">
-              Network: {network}. After funding, refresh dashboard balances and continue the buy-in flow.
+              Network: {network}. After funding, refresh dashboard balances and continue the buy-in.
             </p>
           </div>
         </Modal>
@@ -1781,13 +1884,14 @@ export default function Home() {
         </Modal>
 
         <nav className="fixed bottom-3 left-3 right-3 z-30 rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-white/95 p-2 shadow-[0_14px_28px_rgb(15_23_40_/_12%)] backdrop-blur lg:hidden">
-          <ul className="grid grid-cols-5 gap-1">
+          <ul className="grid grid-cols-6 gap-1">
             {[
               { value: "home", label: "Home", icon: <Landmark size={16} /> },
               { value: "positions", label: "Positions", icon: <Coins size={16} /> },
               { value: "activity", label: "Activity", icon: <Activity size={16} /> },
               { value: "profile", label: "Profile", icon: <UserCircle2 size={16} /> },
               { value: "faq", label: "FAQ", icon: <CircleHelp size={16} /> },
+              { value: "feedback", label: "Feedback", icon: <MessageSquare size={16} /> },
             ].map((option) => (
               <li key={option.value}>
                 <button

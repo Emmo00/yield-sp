@@ -20,15 +20,19 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 ## Environment
 
-Set these variables to enable persisted activity logging:
+Set these variables to enable persisted activity logging and feedback management:
 
 ```bash
 MONGODB_URI=mongodb+srv://<user>:<password>@<cluster>/<database>?retryWrites=true&w=majority
 # Optional. If omitted, the database name is inferred from MONGODB_URI.
 MONGODB_DB=yield_sp
+
+# Required for password-protected feedback management on /admin
+ADMIN_UI_PASSWORD=<strong-admin-password>
 ```
 
 The app writes user activity metadata (buy-ins and claims) to MongoDB through `app/api/activity/route.ts`.
+User feedback is submitted through `app/api/feedback/route.ts`, and feedback read/update actions require `ADMIN_UI_PASSWORD`.
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 

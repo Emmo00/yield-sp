@@ -43,7 +43,7 @@ export function activityActionToTitle(action: ActivityLogAction): string {
     case "claimPayoutSubmitted":
       return "Payout claimed";
     case "buyInFailed":
-      return "Buy-in flow";
+      return "Buy-in";
     case "claimPayoutFailed":
       return "claimPayout";
     default:

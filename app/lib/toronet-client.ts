@@ -38,6 +38,23 @@ interface SignupResult {
   network?: string;
 }
 
+export type FeedbackStatus = "new" | "in_review" | "resolved";
+
+export interface FeedbackRecord {
+  id: string;
+  message: string;
+  status: FeedbackStatus;
+  userAddress?: string;
+  username?: string;
+  createdAt: string;
+  updatedAt: string;
+  resolvedAt?: string;
+}
+
+function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
 export async function loginWithToronet(
   identifier: string,
   password: string,
@@ -102,6 +119,36 @@ export async function signupWithToronet(
     username: normalizedUsername,
     network,
   };
+}
+
+export async function submitSignupEmailApi(email: string): Promise<void> {
+  const normalizedEmail = normalizeEmail(email);
+
+  if (!normalizedEmail) {
+    throw new Error("Email is required.");
+  }
+
+  const response = await fetch("/api/auth/signup", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ email: normalizedEmail }),
+  });
+
+  if (!response.ok) {
+    const fallback = "Could not save sign-up email.";
+
+    let message = fallback;
+    try {
+      const parsed = (await response.json()) as { error?: string };
+      message = parsed.error || fallback;
+    } catch {
+      message = fallback;
+    }
+
+    throw new Error(message);
+  }
 }
 
 export async function getToronetUsernameByAddress(
@@ -252,4 +299,105 @@ export async function fetchActivityHistoryApi(
 
   const payload = (await response.json()) as { items?: ActivityLogRecord[] };
   return Array.isArray(payload.items) ? payload.items : [];
+}
+
+export async function submitFeedbackApi(payload: {
+  message: string;
+  userAddress?: string;
+  username?: string;
+}): Promise<void> {
+  const response = await fetch("/api/feedback", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const fallback = "Could not submit feedback.";
+
+    let message = fallback;
+    try {
+      const parsed = (await response.json()) as { error?: string };
+      message = parsed.error || fallback;
+    } catch {
+      message = fallback;
+    }
+
+    throw new Error(message);
+  }
+}
+
+export async function fetchAdminFeedbackApi(params: {
+  adminPassword: string;
+  status?: FeedbackStatus;
+  limit?: number;
+}): Promise<FeedbackRecord[]> {
+  const query = new URLSearchParams();
+  if (params.status) {
+    query.set("status", params.status);
+  }
+
+  if (typeof params.limit === "number" && Number.isFinite(params.limit)) {
+    query.set("limit", String(Math.max(1, Math.floor(params.limit))));
+  }
+
+  const route = query.toString() ? `/api/feedback?${query.toString()}` : "/api/feedback";
+  const response = await fetch(route, {
+    method: "GET",
+    headers: {
+      "x-admin-password": params.adminPassword,
+    },
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    const fallback = "Could not load feedback.";
+
+    let message = fallback;
+    try {
+      const parsed = (await response.json()) as { error?: string };
+      message = parsed.error || fallback;
+    } catch {
+      message = fallback;
+    }
+
+    throw new Error(message);
+  }
+
+  const payload = (await response.json()) as { items?: FeedbackRecord[] };
+  return Array.isArray(payload.items) ? payload.items : [];
+}
+
+export async function updateAdminFeedbackStatusApi(params: {
+  adminPassword: string;
+  id: string;
+  status: FeedbackStatus;
+}): Promise<void> {
+  const response = await fetch("/api/feedback", {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      "x-admin-password": params.adminPassword,
+    },
+    body: JSON.stringify({
+      id: params.id,
+      status: params.status,
+    }),
+  });
+
+  if (!response.ok) {
+    const fallback = "Could not update feedback status.";
+
+    let message = fallback;
+    try {
+      const parsed = (await response.json()) as { error?: string };
+      message = parsed.error || fallback;
+    } catch {
+      message = fallback;
+    }
+
+    throw new Error(message);
+  }
 }

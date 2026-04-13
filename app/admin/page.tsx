@@ -1,6 +1,16 @@
 "use client";
 
-import { Activity, CircleDollarSign, Landmark, RefreshCcw, Settings2, Wallet } from "lucide-react";
+import {
+  Activity,
+  CircleDollarSign,
+  Landmark,
+  Lock,
+  MessageSquare,
+  RefreshCcw,
+  Settings2,
+  Unlock,
+  Wallet,
+} from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -11,13 +21,21 @@ import {
   type NetworkEnv,
 } from "@/app/lib/constants";
 import { formatDate } from "@/app/lib/format";
-import { queryToronetContractApi, writeToronetContractApi } from "@/app/lib/toronet-client";
+import {
+  fetchAdminFeedbackApi,
+  type FeedbackRecord,
+  type FeedbackStatus,
+  queryToronetContractApi,
+  updateAdminFeedbackStatusApi,
+  writeToronetContractApi,
+} from "@/app/lib/toronet-client";
 import { extractBigIntValue, extractTxHash } from "@/app/lib/toronet-common";
 import { getStoredSession, type ToronetSession } from "@/app/lib/session";
 import { formatBpsAsPercent, formatUnits, percentToBps, toUnits } from "@/app/lib/units";
 
-type AdminTab = "overview" | "funding" | "parameters" | "activity";
+type AdminTab = "overview" | "funding" | "parameters" | "activity" | "feedback";
 type AdminActionKey = "depositYield" | "setBuyInFeePercentage" | "setYieldPercentage" | "setLockPeriod";
+type FeedbackFilter = "all" | FeedbackStatus;
 
 interface AdminSnapshot {
   decimals: number;
@@ -72,6 +90,13 @@ export default function AdminPage() {
   const [confirmSubmitting, setConfirmSubmitting] = useState(false);
 
   const [activity, setActivity] = useState<AdminActivity[]>([]);
+  const [adminPasswordInput, setAdminPasswordInput] = useState("");
+  const [feedbackAdminPassword, setFeedbackAdminPassword] = useState("");
+  const [feedbackFilter, setFeedbackFilter] = useState<FeedbackFilter>("all");
+  const [feedbackItems, setFeedbackItems] = useState<FeedbackRecord[]>([]);
+  const [feedbackLoading, setFeedbackLoading] = useState(false);
+  const [feedbackError, setFeedbackError] = useState("");
+  const [feedbackUpdatingId, setFeedbackUpdatingId] = useState<string | null>(null);
 
   const addActivity = useCallback((title: string, detail: string, status: "completed" | "failed", response?: unknown) => {
     setActivity((previous) => [
@@ -285,6 +310,116 @@ export default function AdminPage() {
       setLockPeriodInput(snapshot.lockPeriodSeconds.toString());
     }
   }, [lockPeriodInput, snapshot.lockPeriodSeconds]);
+
+  const feedbackStatusTone = useCallback((status: FeedbackStatus): "success" | "warning" | "info" => {
+    if (status === "resolved") {
+      return "success";
+    }
+
+    if (status === "in_review") {
+      return "info";
+    }
+
+    return "warning";
+  }, []);
+
+  const feedbackStatusLabel = useCallback((status: FeedbackStatus): string => {
+    if (status === "in_review") {
+      return "In Review";
+    }
+
+    if (status === "resolved") {
+      return "Resolved";
+    }
+
+    return "New";
+  }, []);
+
+  const refreshFeedback = useCallback(
+    async (passwordOverride?: string) => {
+      const password = (passwordOverride ?? feedbackAdminPassword).trim();
+      if (!password) {
+        setFeedbackItems([]);
+        return;
+      }
+
+      setFeedbackLoading(true);
+      setFeedbackError("");
+
+      try {
+        const items = await fetchAdminFeedbackApi({
+          adminPassword: password,
+          status: feedbackFilter === "all" ? undefined : feedbackFilter,
+          limit: 250,
+        });
+
+        setFeedbackItems(items);
+      } catch (cause) {
+        setFeedbackItems([]);
+        setFeedbackError(cause instanceof Error ? cause.message : "Could not load feedback.");
+        throw cause;
+      } finally {
+        setFeedbackLoading(false);
+      }
+    },
+    [feedbackAdminPassword, feedbackFilter],
+  );
+
+  useEffect(() => {
+    if (tab !== "feedback" || !feedbackAdminPassword) {
+      return;
+    }
+
+    void refreshFeedback();
+  }, [feedbackAdminPassword, refreshFeedback, tab]);
+
+  async function unlockFeedbackPanel() {
+    const normalized = adminPasswordInput.trim();
+    if (!normalized) {
+      setFeedbackError("Enter the admin password.");
+      return;
+    }
+
+    setFeedbackError("");
+
+    try {
+      await refreshFeedback(normalized);
+      setFeedbackAdminPassword(normalized);
+    } catch {
+      setFeedbackAdminPassword("");
+    }
+  }
+
+  function lockFeedbackPanel() {
+    setFeedbackAdminPassword("");
+    setAdminPasswordInput("");
+    setFeedbackItems([]);
+    setFeedbackError("");
+    setFeedbackUpdatingId(null);
+  }
+
+  async function updateFeedbackStatus(feedbackId: string, status: FeedbackStatus) {
+    if (!feedbackAdminPassword) {
+      return;
+    }
+
+    setFeedbackUpdatingId(feedbackId);
+    setFeedbackError("");
+
+    try {
+      await updateAdminFeedbackStatusApi({
+        adminPassword: feedbackAdminPassword,
+        id: feedbackId,
+        status,
+      });
+
+      await refreshFeedback();
+    } catch (cause) {
+      setFeedbackError(cause instanceof Error ? cause.message : "Could not update feedback status.");
+    } finally {
+      setFeedbackUpdatingId(null);
+    }
+  }
 
   async function runAction(label: string, operation: () => Promise<unknown>): Promise<boolean> {
     if (!session) {
@@ -590,6 +725,7 @@ export default function AdminPage() {
             { value: "funding", label: "Funding" },
             { value: "parameters", label: "Parameters" },
             { value: "activity", label: "Activity" },
+            { value: "feedback", label: "Feedback" },
           ]}
         />
 
@@ -809,6 +945,168 @@ export default function AdminPage() {
               </div>
             </Card>
           ) : null}
+
+          {tab === "feedback" ? (
+            <Card
+              title="User Feedback"
+              subtitle="Password-protected list of user feedback with workflow states."
+            >
+              {!feedbackAdminPassword ? (
+                <div className="space-y-4">
+                  <Field
+                    label="Admin password"
+                    hint="Set ADMIN_UI_PASSWORD in environment variables."
+                  >
+                    <input
+                      type="password"
+                      value={adminPasswordInput}
+                      onChange={(event) => setAdminPasswordInput(event.target.value)}
+                      className="h-12 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white px-3 text-sm outline-none"
+                      placeholder="Enter admin password"
+                    />
+                  </Field>
+
+                  {feedbackError ? (
+                    <p className="rounded-[var(--radius-md)] border border-[var(--color-error-100)] bg-[var(--color-error-100)] px-3 py-2 text-sm text-[var(--color-error-700)]">
+                      {feedbackError}
+                    </p>
+                  ) : null}
+
+                  <Button
+                    onClick={() => {
+                      void unlockFeedbackPanel();
+                    }}
+                    disabled={feedbackLoading}
+                  >
+                    <Lock size={16} />
+                    {feedbackLoading ? "Verifying..." : "Unlock Feedback"}
+                  </Button>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <div className="flex gap-2 overflow-x-auto pb-1">
+                      {[
+                        { value: "all", label: "All" },
+                        { value: "new", label: "New" },
+                        { value: "in_review", label: "In Review" },
+                        { value: "resolved", label: "Resolved" },
+                      ].map((option) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onClick={() => setFeedbackFilter(option.value as FeedbackFilter)}
+                          className={`h-9 shrink-0 whitespace-nowrap rounded-[10px] border px-3 text-xs font-semibold transition ${
+                            feedbackFilter === option.value
+                              ? "border-[var(--color-primary-200)] bg-[var(--color-primary-100)] text-[var(--color-primary-700)]"
+                              : "border-[var(--color-border)] bg-[var(--color-surface-alt)] text-[var(--color-text-secondary)]"
+                          }`}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="secondary"
+                        onClick={() => {
+                          void refreshFeedback();
+                        }}
+                        disabled={feedbackLoading || feedbackUpdatingId !== null}
+                      >
+                        <RefreshCcw size={16} />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        onClick={lockFeedbackPanel}
+                        disabled={feedbackLoading || feedbackUpdatingId !== null}
+                      >
+                        <Unlock size={16} />
+                        Lock
+                      </Button>
+                    </div>
+                  </div>
+
+                  {feedbackError ? (
+                    <p className="rounded-[var(--radius-md)] border border-[var(--color-error-100)] bg-[var(--color-error-100)] px-3 py-2 text-sm text-[var(--color-error-700)]">
+                      {feedbackError}
+                    </p>
+                  ) : null}
+
+                  <div className="space-y-3">
+                    {feedbackItems.length === 0 ? (
+                      <p className="text-sm text-[var(--color-text-secondary)]">
+                        {feedbackLoading ? "Loading feedback..." : "No feedback found for this filter."}
+                      </p>
+                    ) : (
+                      feedbackItems.map((item) => (
+                        <article
+                          key={item.id}
+                          className="rounded-[var(--radius-md)] border border-[var(--color-border)] p-3"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <p className="text-sm font-semibold text-[var(--color-text-primary)]">
+                              {item.username || "Anonymous user"}
+                            </p>
+                            <Badge tone={feedbackStatusTone(item.status)}>
+                              {feedbackStatusLabel(item.status)}
+                            </Badge>
+                          </div>
+                          <p className="mt-2 text-sm text-[var(--color-text-secondary)]">{item.message}</p>
+                          <div className="mt-2 space-y-1 text-xs text-[var(--color-text-tertiary)]">
+                            <p>Submitted: {formatDate(item.createdAt)}</p>
+                            {item.userAddress ? <p>Address: {item.userAddress}</p> : null}
+                            {item.resolvedAt ? <p>Resolved: {formatDate(item.resolvedAt)}</p> : null}
+                          </div>
+
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            <Button
+                              variant="secondary"
+                              disabled={
+                                feedbackUpdatingId === item.id ||
+                                feedbackLoading ||
+                                item.status === "new"
+                              }
+                              onClick={() => {
+                                void updateFeedbackStatus(item.id, "new");
+                              }}
+                            >
+                              Mark New
+                            </Button>
+                            <Button
+                              variant="secondary"
+                              disabled={
+                                feedbackUpdatingId === item.id ||
+                                feedbackLoading ||
+                                item.status === "in_review"
+                              }
+                              onClick={() => {
+                                void updateFeedbackStatus(item.id, "in_review");
+                              }}
+                            >
+                              Mark In Review
+                            </Button>
+                            <Button
+                              disabled={
+                                feedbackUpdatingId === item.id ||
+                                feedbackLoading ||
+                                item.status === "resolved"
+                              }
+                              onClick={() => {
+                                void updateFeedbackStatus(item.id, "resolved");
+                              }}
+                            >
+                              {feedbackUpdatingId === item.id ? "Updating..." : "Resolve"}
+                            </Button>
+                          </div>
+                        </article>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
+            </Card>
+          ) : null}
         </div>
 
         <Modal
@@ -862,12 +1160,13 @@ export default function AdminPage() {
         </Modal>
 
         <nav className="fixed bottom-3 left-3 right-3 z-30 rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-white/95 p-2 shadow-[0_14px_28px_rgb(15_23_40_/_12%)] backdrop-blur lg:hidden">
-          <ul className="grid grid-cols-4 gap-1">
+          <ul className="grid grid-cols-5 gap-1">
             {[
               { value: "overview", label: "Overview", icon: <Landmark size={16} /> },
               { value: "funding", label: "Funding", icon: <Wallet size={16} /> },
               { value: "parameters", label: "Parameters", icon: <CircleDollarSign size={16} /> },
               { value: "activity", label: "Activity", icon: <Activity size={16} /> },
+              { value: "feedback", label: "Feedback", icon: <MessageSquare size={16} /> },
             ].map((option) => (
               <li key={option.value}>
                 <button
