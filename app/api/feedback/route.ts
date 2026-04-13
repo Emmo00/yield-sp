@@ -240,7 +240,11 @@ export async function GET(request: NextRequest) {
     await ensureIndexes();
 
     const collection = await getMongoCollection<FeedbackDocument>("user_feedback");
-    const query = rawStatus ? { status: rawStatus } : {};
+    const statusFilter: FeedbackStatus | undefined =
+      rawStatus && isFeedbackStatus(rawStatus) ? rawStatus : undefined;
+    const query: { status?: FeedbackStatus } = statusFilter
+      ? { status: statusFilter }
+      : {};
 
     const items = await collection
       .find(query)
@@ -282,29 +286,25 @@ export async function PATCH(request: NextRequest) {
     const collection = await getMongoCollection<FeedbackDocument>("user_feedback");
     const now = new Date();
 
-    const updateDocument =
+    const filter = { _id: new ObjectId(validated.value.id) };
+    const updateResult =
       validated.value.status === "resolved"
-        ? {
+        ? await collection.updateOne(filter, {
             $set: {
               status: validated.value.status,
               updatedAt: now,
               resolvedAt: now,
             },
-          }
-        : {
+          })
+        : await collection.updateOne(filter, {
             $set: {
               status: validated.value.status,
               updatedAt: now,
             },
             $unset: {
-              resolvedAt: "",
+              resolvedAt: true,
             },
-          };
-
-    const updateResult = await collection.updateOne(
-      { _id: new ObjectId(validated.value.id) },
-      updateDocument,
-    );
+          });
 
     if (!updateResult.matchedCount) {
       return NextResponse.json({ error: "Feedback not found." }, { status: 404 });
