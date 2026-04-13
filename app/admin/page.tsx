@@ -949,13 +949,12 @@ export default function AdminPage() {
           {tab === "feedback" ? (
             <Card
               title="User Feedback"
-              subtitle="Password-protected list of user feedback with workflow states."
+              subtitle="List of user feedback."
             >
               {!feedbackAdminPassword ? (
                 <div className="space-y-4">
                   <Field
                     label="Admin password"
-                    hint="Set ADMIN_UI_PASSWORD in environment variables."
                   >
                     <input
                       type="password"

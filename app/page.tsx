@@ -1332,7 +1332,7 @@ export default function Home() {
               </div>
 
               <div className="grid gap-4 md:grid-cols-2">
-                <Card title="Buy In" subtitle="3-step">
+                <Card title="Buy In">
                   <div className="space-y-4">
                     <p className="text-sm text-[var(--color-text-secondary)]">
                       Enter amount, review totals, then confirm once to submit approve.
@@ -1360,7 +1360,7 @@ export default function Home() {
                   </div>
                 </Card>
 
-                <Card title="Claim Payout" subtitle="Review and submit claimPayout">
+                <Card title="Claim Payout">
                   <div className="space-y-3 text-sm text-[var(--color-text-secondary)]">
                     <p>
                       Claimable now: <strong>{formatToken(portfolio.availablePayout)}</strong>
