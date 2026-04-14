@@ -6,7 +6,7 @@ import {
 } from "torosdk";
 
 // Create a new ToroNet wallet
-async function createToroWallet() {
+export async function createToroWallet() {
   const walletAddress = await createWallet({
     username: "myuser123",
     password: "securePassword123",
@@ -16,7 +16,7 @@ async function createToroWallet() {
 }
 
 // Import an existing wallet from private key
-async function importToroWallet() {
+export async function importToroWallet() {
   const address = await importWalletFromPrivateKeyAndPassword({
     pvKey: "yourPrivateKeyHere",
     password: "yourPasswordHere",
@@ -26,7 +26,7 @@ async function importToroWallet() {
 }
 
 // Verify a wallet password
-async function verifyToroWalletPassword() {
+export async function verifyToroWalletPassword() {
   const isValid = await verifyWalletPassword({
     address: "0xYourAddress",
     password: "yourPassword",
@@ -36,7 +36,7 @@ async function verifyToroWalletPassword() {
 }
 
 // Retrieve wallet key in a secure context only
-async function readToroWalletKey() {
+export async function readToroWalletKey() {
   const key = await getWalletKey({
     address: "0xYourWalletAddress",
   });

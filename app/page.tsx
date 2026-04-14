@@ -673,7 +673,8 @@ export default function Home() {
           return previous;
         }
 
-        const { [positionKey]: _removed, ...rest } = previous;
+        const rest = { ...previous };
+        delete rest[positionKey];
         return rest;
       }
 
