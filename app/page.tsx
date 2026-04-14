@@ -99,7 +99,8 @@ interface BuyInDraft {
   amountInput: string;
   amountUnits: bigint;
   feeAmount: bigint;
-  netPrincipal: bigint;
+  totalChargedAmount: bigint;
+  principalAmount: bigint;
   projectedPayout: bigint;
 }
 
@@ -135,7 +136,7 @@ const FAQ_ITEMS = [
   {
     question: "How are fee and projected payout calculated?",
     answer:
-      "Fee and yield rates are read from LoanVault contract parameters. The review step shows gross amount, fee, net principal, and projected payout.",
+      "Fee and yield rates are read from LoanVault contract parameters. The review step shows amount, fee, total charged, and projected payout.",
   },
   {
     question: "When can I claim payout?",
@@ -414,6 +415,7 @@ export default function Home() {
     if (!normalized) {
       return {
         units: null as bigint | null,
+        totalChargedAmount: null as bigint | null,
         isValid: false,
       };
     }
@@ -423,29 +425,35 @@ export default function Home() {
       if (units <= BigInt(0)) {
         return {
           units: null as bigint | null,
+          totalChargedAmount: null as bigint | null,
           isValid: false,
         };
       }
 
+      const feeAmount = (units * portfolio.buyInFeeBps) / BigInt(10000);
+      const totalChargedAmount = units + feeAmount;
+
       return {
         units,
+        totalChargedAmount,
         isValid: true,
       };
     } catch {
       return {
         units: null as bigint | null,
+        totalChargedAmount: null as bigint | null,
         isValid: false,
       };
     }
-  }, [buyInAmountInput, portfolio.decimals]);
+  }, [buyInAmountInput, portfolio.buyInFeeBps, portfolio.decimals]);
 
   const buyInHasInsufficientBalance = useMemo(() => {
-    if (!buyInAmountPreview.units) {
+    if (!buyInAmountPreview.totalChargedAmount) {
       return false;
     }
 
-    return buyInAmountPreview.units > portfolio.stablecoinBalance;
-  }, [buyInAmountPreview.units, portfolio.stablecoinBalance]);
+    return buyInAmountPreview.totalChargedAmount > portfolio.stablecoinBalance;
+  }, [buyInAmountPreview.totalChargedAmount, portfolio.stablecoinBalance]);
 
   const buyInModalError = useMemo(() => {
     if (!buyInModalOpen) {
@@ -911,20 +919,23 @@ export default function Home() {
       throw new Error("Amount must be greater than zero.");
     }
 
-    if (amountUnits > portfolio.stablecoinBalance) {
-      throw new Error("Insufficient wallet balance. Use top up to fund your wallet.");
+    const feeAmount = (amountUnits * portfolio.buyInFeeBps) / BigInt(10000);
+    const totalChargedAmount = amountUnits + feeAmount;
+
+    if (totalChargedAmount > portfolio.stablecoinBalance) {
+      throw new Error("Insufficient wallet balance for amount + fee. Use top up to fund your wallet.");
     }
 
-    const feeAmount = (amountUnits * portfolio.buyInFeeBps) / BigInt(10000);
-    const netPrincipal = amountUnits - feeAmount;
+    const principalAmount = amountUnits;
     const projectedPayout =
-      netPrincipal + (netPrincipal * portfolio.yieldBps) / BigInt(10000);
+      principalAmount + (principalAmount * portfolio.yieldBps) / BigInt(10000);
 
     return {
       amountInput: normalized,
       amountUnits,
       feeAmount,
-      netPrincipal,
+      totalChargedAmount,
+      principalAmount,
       projectedPayout,
     };
   }
@@ -956,14 +967,14 @@ export default function Home() {
         password: session.password,
         contract: "stablecoin",
         functionName: "approve",
-        args: [vaultAddress, buyInDraft.amountUnits],
+        args: [vaultAddress, buyInDraft.totalChargedAmount],
       });
 
       const approveTxHash = extractTxHash(approveResponse) ?? "";
       setBuyInApproveTxHash(approveTxHash);
       addActivity(
         "Approval confirmed",
-        `Approved ${buyInDraft.amountInput} ${portfolio.symbol} for vault usage.`,
+        `Approved ${formatToken(buyInDraft.totalChargedAmount)} (amount + fee) for vault usage.`,
         "completed",
         approveResponse,
       );
@@ -1000,10 +1011,10 @@ export default function Home() {
       setPortfolio((previous) => ({
         ...previous,
         stablecoinBalance:
-          previous.stablecoinBalance > buyInDraft.amountUnits
-            ? previous.stablecoinBalance - buyInDraft.amountUnits
+          previous.stablecoinBalance > buyInDraft.totalChargedAmount
+            ? previous.stablecoinBalance - buyInDraft.totalChargedAmount
             : BigInt(0),
-        totalInvested: previous.totalInvested + buyInDraft.netPrincipal,
+        totalInvested: previous.totalInvested + buyInDraft.principalAmount,
         projectedPayout: previous.projectedPayout + buyInDraft.projectedPayout,
       }));
 
@@ -1652,7 +1663,7 @@ export default function Home() {
           <div className="space-y-4">
             {buyInStep === "amount" ? (
               <>
-                <Field label={`Amount (${portfolio.symbol})`} hint="This amount will be approved and then supplied to buyIn.">
+                <Field label={`Amount (${portfolio.symbol})`} hint="Your wallet must cover amount + fee. The app approves total charged, then calls buyIn(amount).">
                   <input
                     value={buyInAmountInput}
                     onChange={(event) => setBuyInAmountInput(event.target.value)}
@@ -1669,7 +1680,7 @@ export default function Home() {
                 </p>
                 {buyInHasInsufficientBalance ? (
                   <div className="rounded-[var(--radius-md)] border border-[var(--color-warning-100)] bg-[var(--color-warning-100)] px-3 py-2 text-sm text-[var(--color-warning-700)]">
-                    <p className="font-semibold">Balance is not enough for this buy-in amount.</p>
+                    <p className="font-semibold">Balance is not enough for amount + fee.</p>
                     <button
                       type="button"
                       onClick={openTopUpModal}
@@ -1692,13 +1703,13 @@ export default function Home() {
                 </p>
                 <div className="grid gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-sm text-[var(--color-text-secondary)]">
                   <p>
-                    Gross amount: <strong>{buyInDraft.amountInput} {portfolio.symbol}</strong>
+                    Amount: <strong>{buyInDraft.amountInput} {portfolio.symbol}</strong>
                   </p>
                   <p>
                     Buy-in fee ({formatBpsAsPercent(portfolio.buyInFeeBps)}): <strong>{formatToken(buyInDraft.feeAmount)}</strong>
                   </p>
                   <p>
-                    Net principal: <strong>{formatToken(buyInDraft.netPrincipal)}</strong>
+                    Total needed for transaction: <strong>{formatToken(buyInDraft.totalChargedAmount)}</strong>
                   </p>
                   <p>
                     Projected payout ({formatBpsAsPercent(portfolio.yieldBps)}): <strong>{formatToken(buyInDraft.projectedPayout)}</strong>
@@ -1708,8 +1719,8 @@ export default function Home() {
                     <strong>
                       {" "}
                       {formatToken(
-                        portfolio.stablecoinBalance > buyInDraft.amountUnits
-                          ? portfolio.stablecoinBalance - buyInDraft.amountUnits
+                        portfolio.stablecoinBalance > buyInDraft.totalChargedAmount
+                          ? portfolio.stablecoinBalance - buyInDraft.totalChargedAmount
                           : BigInt(0),
                       )}
                     </strong>
@@ -1717,7 +1728,7 @@ export default function Home() {
                 </div>
                 <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white px-3 py-2 text-sm text-[var(--color-text-secondary)]">
                   <p className="font-semibold text-[var(--color-text-primary)]">Transaction sequence</p>
-                  <p className="mt-1">1. approve(vault, amount)</p>
+                  <p className="mt-1">1. approve(vault, amount + fee)</p>
                   <p>2. buyIn(amount)</p>
                 </div>
               </>
